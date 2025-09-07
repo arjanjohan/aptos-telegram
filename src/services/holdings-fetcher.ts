@@ -35,8 +35,6 @@ export interface FaBalance {
 
 export interface CoinDescription {
   chainId: number;
-  tokenAddress: string | null; // For v1 coins
-  faAddress: string | null;    // For v2 fungible assets
   name: string;
   symbol: string;
   decimals: number;
@@ -135,6 +133,30 @@ export function getAssetSymbol(
   if (panoraSymbol) return panoraSymbol;
   if (bridge && metadataSymbol) return `${metadataSymbol} (${bridge})`;
   return metadataSymbol || 'Unknown';
+}
+
+/**
+ * Determines if an asset_type is a Coin or Fungible Asset based on the raw value.
+ *
+ * @param assetType - The raw asset_type from GraphQL
+ * @returns 'Coin' for v1 coins, 'FungibleAsset' for v2 fungible assets
+ */
+export function isCoin(assetType: string): boolean {
+  // Coins typically have the format: "0x1::module_name::StructName" or "0x1::aptos_coin::AptosCoin"
+  // Fungible Assets typically have the format: "0x1234567890abcdef..." (64 hex chars)
+
+  // If it contains "::" it's likely a Coin (v1)
+  if (assetType.includes('::')) {
+    return true;
+  }
+
+  // If it's a 64-character hex string, it's likely a Fungible Asset (v2)
+  if (/^0x[0-9a-fA-F]{64}$/.test(assetType)) {
+    return false;
+  }
+
+  // Default fallback - could be either, but let's assume FA for unknown formats
+  return false;
 }
 
 // ============================================================================
@@ -238,8 +260,8 @@ export class AptosHoldingsFetcher {
       return this.verifiedTokensCache;
     }
 
-    // Use only hardcoded coins
-    this.verifiedTokensCache = this.getHardcodedCoins();
+    // Return empty object since we removed hardcoded coins
+    this.verifiedTokensCache = {};
     return this.verifiedTokensCache;
   }
 
@@ -291,18 +313,10 @@ export class AptosHoldingsFetcher {
    * Finds coin data by asset type, matching both FA addresses and token addresses.
    */
   findCoinData(coinData: CoinDescription[], assetType: string): CoinDescription | undefined {
-    const coinType = assetType.includes("::") ? assetType.split("::")[0] : undefined;
-    const faAddress = assetType && tryStandardizeAddress(assetType);
-
-    return coinData.find((c) => {
-      const isMatchingFa =
-        faAddress &&
-        c.faAddress &&
-        tryStandardizeAddress(faAddress) === tryStandardizeAddress(c.faAddress);
-      const isMatchingCoin =
-        coinType && c.tokenAddress && c.tokenAddress === coinType;
-      return isMatchingCoin || isMatchingFa;
-    });
+    // Since we removed tokenAddress and faAddress from CoinDescription,
+    // we'll need to match against the asset_type directly or use a different approach
+    // For now, return undefined to use the fallback logic
+    return undefined;
   }
 
   /**
@@ -350,11 +364,9 @@ export class AptosHoldingsFetcher {
             amount: coin.amount,
             decimals: coin.metadata.decimals,
             symbol: coin.metadata.symbol,
-            assetType: coin.asset_type,
+            assetType: coin.asset_type, // Keep raw asset_type
             assetVersion: coin.metadata.token_standard,
             chainId: 0,
-            tokenAddress: coin.metadata.token_standard === "v1" ? coin.asset_type : null,
-            faAddress: coin.metadata.token_standard === "v2" ? coin.asset_type : null,
             bridge: null,
             panoraSymbol: null,
             logoUrl: "",
@@ -486,59 +498,6 @@ export class AptosHoldingsFetcher {
     return data.data;
   }
 
-  /**
-   * Returns hardcoded coin data for native tokens.
-   */
-  private getHardcodedCoins(): Record<string, CoinDescription> {
-    return {
-      "0x1::aptos_coin::AptosCoin": {
-        chainId: 1,
-        tokenAddress: "0x1::aptos_coin::AptosCoin",
-        faAddress: "0x1::aptos_coin::AptosCoin",
-        name: "Aptos Coin",
-        symbol: "APT",
-        decimals: 8,
-        panoraSymbol: "APT",
-        bridge: null,
-        logoUrl: "/logo.png",
-        websiteUrl: "https://aptoslabs.com",
-        category: "Native",
-        isInPanoraTokenList: false,
-        panoraUI: false,
-        usdPrice: null,
-        panoraTags: ["Native"],
-        isBanned: false,
-        panoraOrderIndex: 1,
-        panoraIndex: 1,
-        coinGeckoId: "aptos",
-        coinMarketCapId: 21794,
-        native: true,
-      },
-      "0x000000000000000000000000000000000000000000000000000000000000000a": {
-        chainId: 1,
-        tokenAddress: "0xa",
-        faAddress: "0xa",
-        name: "Aptos Coin",
-        symbol: "APT",
-        decimals: 8,
-        panoraSymbol: "APT",
-        bridge: null,
-        logoUrl: "/logo.png",
-        websiteUrl: "https://aptoslabs.com",
-        category: "Native",
-        isInPanoraTokenList: false,
-        panoraUI: false,
-        usdPrice: null,
-        panoraTags: ["InternalFA"],
-        isBanned: false,
-        panoraOrderIndex: 1,
-        panoraIndex: 1,
-        coinGeckoId: "aptos",
-        coinMarketCapId: 21794,
-        native: true,
-      },
-    };
-  }
 }
 
 // ============================================================================
