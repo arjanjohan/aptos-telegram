@@ -36,6 +36,12 @@ jspm_packages/
 # TypeScript cache
 *.tsbuildinfo
 
+# TypeScript compiled output
+*.js
+*.js.map
+*.d.ts
+*.d.ts.map
+
 # Optional npm cache directory
 .npm
 
@@ -189,3 +195,5 @@ build/
 
 # Prisma
 prisma/migrations/
+
+PLAN.md
