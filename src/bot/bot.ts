@@ -28,7 +28,7 @@ export class Bot {
   private APTOS_PRIVATE_KEY: string;
   private kanaLabsPerps: KanaLabsPerpsService;
   private pendingTransfers: Map<number, { assetIndex: number; step: string; recipientAddress?: string; amount?: string; orderData?: { marketId: string; orderSide: string; market: any } }> = new Map();
-  private pendingDeposits: Map<number, { marketId: string; step: string; amount?: string }> = new Map();
+  private pendingDeposits: Map<number, { step: string; amount?: string }> = new Map();
   private pendingVotes: Map<string, { pollId: string; action: string; data: any; voters: Set<number>; startTime: number }> = new Map();
 
   // Settings storage (in production, this would be in a database)
@@ -36,6 +36,7 @@ export class Bot {
   private settings = {
     disableConfirmation: false,
     defaultTransferAmounts: [25, 50], // 25%, 50% - 100% and custom are always present
+    defaultBuyAmounts: [100, 200, 500], // $100, $200, $500 - custom is always present
     minimumDisplayAmount: 0, // Minimum USD value to display positions
     votingTimePeriod: 300, // Voting time in seconds (5 minutes)
     votingThreshold: 0.5 // Approval threshold (0.0 to 1.0 = 0% to 100%)
@@ -73,7 +74,7 @@ export class Bot {
 
     // Deposit command
     this.bot.command("deposit", async (ctx) => {
-      await this.showDepositMenu(ctx);
+      await this.showDepositAmountPrompt(ctx);
     });
 
     // Faucet command
@@ -109,9 +110,21 @@ export class Bot {
         await this.handleVotingThresholdInput(ctx, text);
       } else if (pendingTransfer.step === 'transfer_amount_input') {
         await this.handleTransferAmountInput(ctx, text);
+      } else if (pendingTransfer.step === 'buy_amount_input') {
+        await this.handleBuyAmountInput(ctx, text);
       } else if (pendingTransfer.step === 'order_size_input') {
         await this.handleOrderSizeInput(ctx, text);
         }
+        return;
+      }
+
+      // Handle deposit amount input (check this first before numeric commands)
+      const pendingDeposit = this.pendingDeposits.get(userId);
+      if (pendingDeposit && pendingDeposit.step === 'custom_amount') {
+        await this.handleDepositCustomAmountInput(ctx, text);
+        return;
+      } else if (pendingDeposit && pendingDeposit.step === 'withdraw_amount') {
+        await this.handleWithdrawAmountInput(ctx, pendingDeposit, text);
         return;
       }
 
@@ -120,12 +133,6 @@ export class Bot {
         const index = parseInt(text);
         await this.showAssetOverview(ctx, index);
         return;
-      }
-
-      // Handle deposit amount input
-      const pendingDeposit = this.pendingDeposits.get(userId);
-      if (pendingDeposit && pendingDeposit.step === 'amount') {
-        await this.handleDepositAmountInput(ctx, pendingDeposit, text);
       }
     });
 
@@ -199,9 +206,9 @@ export class Bot {
       } else if (data === "refresh") {
         await this.showHomepage(ctx);
       } else if (data === "deposit") {
-        await this.showDepositMenu(ctx);
+        await this.showDepositAmountPrompt(ctx);
       } else if (data === "withdraw") {
-        ctx.reply("Withdraw functionality coming soon! 📤");
+        await this.showWithdrawMenu(ctx);
       } else if (data === "open_orders") {
         await this.showOpenOrders(ctx);
       } else if (data === "positions") {
@@ -237,6 +244,12 @@ export class Bot {
         await this.promptTransferAmountInput(ctx, 1);
       } else if (data === "set_transfer_amount_2") {
         await this.promptTransferAmountInput(ctx, 2);
+      } else if (data === "set_buy_amount_1") {
+        await this.promptBuyAmountInput(ctx, 1);
+      } else if (data === "set_buy_amount_2") {
+        await this.promptBuyAmountInput(ctx, 2);
+      } else if (data === "set_buy_amount_3") {
+        await this.promptBuyAmountInput(ctx, 3);
       } else if (data === "markets") {
         await this.showMarketSelection(ctx);
       } else if (data.startsWith("select_market_")) {
@@ -272,18 +285,22 @@ export class Bot {
           const size = parseFloat(parts[4]);
           await this.executeOrder(ctx, marketId, orderSide, size);
         }
-      } else if (data.startsWith("deposit_market_")) {
-        const parts = data.split("_");
-        if (parts.length > 2 && parts[2]) {
-          const marketId = parts[2];
-          await this.showDepositAmountPrompt(ctx, marketId);
-        }
-      } else if (data.startsWith("confirm_deposit_")) {
-        const parts = data.split("_");
-        if (parts.length > 2 && parts[2]) {
-          const marketId = parts[2];
-          await this.executeDeposit(ctx, marketId);
-        }
+      } else if (data === "confirm_deposit") {
+        await this.executeDeposit(ctx);
+      } else if (data === "deposit_25") {
+        await this.handleDepositPercentage(ctx, 0.25);
+      } else if (data === "deposit_50") {
+        await this.handleDepositPercentage(ctx, 0.50);
+      } else if (data === "deposit_75") {
+        await this.handleDepositPercentage(ctx, 0.75);
+      } else if (data === "deposit_100") {
+        await this.handleDepositPercentage(ctx, 1.00);
+      } else if (data === "deposit_custom") {
+        await this.promptDepositCustomAmount(ctx);
+      } else if (data === "withdraw_amount") {
+        await this.showWithdrawAmountPrompt(ctx);
+      } else if (data === "confirm_withdraw") {
+        await this.executeWithdraw(ctx);
       }
     });
 
@@ -460,7 +477,9 @@ export class Bot {
         `*Transaction Confirmation:* ${this.settings.disableConfirmation ? '❌ Disabled' : '✅ Enabled'}\n` +
         `*Minimum Display Amount:* $${this.settings.minimumDisplayAmount}\n` +
         `*Transfer Amount Buttons:*\n`   +
-        `${this.settings.defaultTransferAmounts[0]}% - ${this.settings.defaultTransferAmounts[1]}% - 100% - custom \n\n` +
+        `${this.settings.defaultTransferAmounts[0]}% - ${this.settings.defaultTransferAmounts[1]}% - 100% - custom \n` +
+        `*Buy Amount Buttons:*\n` +
+        `$${this.settings.defaultBuyAmounts[0]} - $${this.settings.defaultBuyAmounts[1]} - $${this.settings.defaultBuyAmounts[2]} - custom \n\n` +
         `*--- VOTING SETTINGS ---*\n` +
         `*Voting Time:* ${votingTimeMinutes} minutes\n` +
         `*Approval Threshold:* ${votingThresholdPercent}%\n\n` +
@@ -477,6 +496,13 @@ export class Bot {
         .row()
         .text(`${this.settings.defaultTransferAmounts[0]}%`, "set_transfer_amount_1")
         .text(`${this.settings.defaultTransferAmounts[1]}%`, "set_transfer_amount_2")
+        .row()
+        // Buy Amount Buttons
+        .text("Buy Amount Buttons", "no_action")
+        .row()
+        .text(`$${this.settings.defaultBuyAmounts[0]}`, "set_buy_amount_1")
+        .text(`$${this.settings.defaultBuyAmounts[1]}`, "set_buy_amount_2")
+        .text(`$${this.settings.defaultBuyAmounts[2]}`, "set_buy_amount_3")
         .row()
         // Minimum Display Amount setting
         .text("Minimum Display Amount", "no_action")
@@ -596,6 +622,28 @@ export class Bot {
     }
   }
 
+  private async promptBuyAmountInput(ctx: any, buttonIndex: number) {
+    const currentValue = this.settings.defaultBuyAmounts[buttonIndex - 1];
+    const message = `⚙️ *Set Buy Amount Button*\n\n` +
+      `Current value: $${currentValue}\n\n` +
+      `Please enter the new USD amount for this button.\n` +
+      `Send a number (e.g., 50, 100, 250):`;
+
+    const keyboard = new InlineKeyboard()
+      .text("❌ Cancel", "settings");
+
+    ctx.reply(message, {
+      parse_mode: "Markdown",
+      reply_markup: keyboard
+    });
+
+    // Store the user's state for input handling
+    const userId = ctx.from?.id;
+    if (userId) {
+      this.pendingTransfers.set(userId, { assetIndex: buttonIndex, step: 'buy_amount_input' });
+    }
+  }
+
   private async handleMinDisplayInput(ctx: any, text: string) {
     try {
       const amount = parseFloat(text);
@@ -706,6 +754,42 @@ export class Bot {
     } catch (error) {
       console.error("Error handling transfer amount input:", error);
       ctx.reply("❌ Error setting transfer amount. Please try again.");
+    }
+  }
+
+  private async handleBuyAmountInput(ctx: any, text: string) {
+    try {
+      const amount = parseFloat(text);
+
+      if (isNaN(amount) || amount <= 0) {
+        ctx.reply("❌ Invalid amount. Please enter a positive number (e.g., 50, 100, 250):");
+        return;
+      }
+
+      // Get the button index from the pending transfer
+      const userId = ctx.from?.id;
+      if (!userId) return;
+
+      const pendingTransfer = this.pendingTransfers.get(userId);
+      if (!pendingTransfer) return;
+
+      const buttonIndex = pendingTransfer.assetIndex;
+      if (buttonIndex < 1 || buttonIndex > 2) {
+        ctx.reply("❌ Invalid button index.");
+        return;
+      }
+
+      // Update the buy amount
+      this.settings.defaultBuyAmounts[buttonIndex - 1] = amount;
+
+      // Clear the pending transfer
+      this.pendingTransfers.delete(userId);
+
+      // Go directly back to settings
+      await this.showSettings(ctx);
+    } catch (error) {
+      console.error("Error handling buy amount input:", error);
+      ctx.reply("❌ Error setting buy amount. Please try again.");
     }
   }
 
@@ -904,7 +988,7 @@ export class Bot {
         parse_mode: "Markdown",
         reply_markup: keyboard
       });
-    } catch (error) {
+          } catch (error) {
       console.error("Error prompting for address:", error);
       ctx.reply("Error loading address input. Please try again.");
     }
@@ -1165,7 +1249,7 @@ export class Bot {
           holding.assetType,
           rawAmount
         );
-      } else {
+          } else {
         // Transfer Fungible Asset (v2)
         transactionHash = await this.transferFungibleAsset(
           pendingTransfer.recipientAddress!,
@@ -1316,37 +1400,6 @@ export class Bot {
     }
   }
 
-  private async showDepositMenu(ctx: any) {
-    try {
-      // Get available markets from Kana Labs
-      const markets = await this.getAvailableMarkets();
-
-      let message = "📥 *Deposit to Kana Labs Perps*\n\n";
-      message += "Select a market to deposit into:\n\n";
-
-      const keyboard = new InlineKeyboard();
-
-      markets.forEach((market, index) => {
-        keyboard.text(`${market.base_name}`, `deposit_market_${market.market_id}`);
-        if ((index + 1) % 2 === 0) {
-          keyboard.row();
-        }
-      });
-
-      keyboard.row().text("🔙 Back to Home", "start");
-
-      ctx.reply(message, {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      });
-        } catch (error) {
-      console.error("Error showing deposit menu:", error);
-      ctx.reply("❌ Error loading markets. Please try again.", {
-        reply_markup: new InlineKeyboard().text("🔙 Back to Home", "start")
-      });
-    }
-  }
-
   private async showMarketSelection(ctx: any) {
     try {
       // Get testnet markets from Kana Labs documentation
@@ -1359,12 +1412,6 @@ export class Bot {
 
       let message = "📊 *Markets*\n\n";
       message += "Select a market to view details and trade:\n\n";
-
-      // Display markets (simple overview)
-      testnetMarkets.forEach((market) => {
-        message += `**${market.asset}**\n`;
-        message += `${market.description}\n\n`;
-      });
 
       const keyboard = new InlineKeyboard();
 
@@ -1405,7 +1452,7 @@ export class Bot {
 
       // Fetch detailed market data
       console.log(`🔍 [MARKET_DETAILS] Fetching data for market ${marketId}`);
-      
+
       const [marketInfo, marketPrice] = await Promise.all([
         this.kanaLabsPerps.getMarketInfo(marketId).catch(err => {
           console.error(`❌ [MARKET_DETAILS] Error fetching market info:`, err.message);
@@ -1416,13 +1463,28 @@ export class Bot {
           return { success: false, data: null, message: err.message };
         })
       ]);
-      
+
       console.log(`🔍 [MARKET_DETAILS] Market info result:`, marketInfo.success ? 'SUCCESS' : 'FAILED');
       console.log(`🔍 [MARKET_DETAILS] Market price result:`, marketPrice.success ? 'SUCCESS' : 'FAILED');
 
       let message = `📊 *${market.asset}*\n\n`;
-      message += `**Market Information**\n`;
-      message += `Description: ${market.description}\n\n`;
+
+      // Show current price information
+      if (marketPrice.success && marketPrice.data) {
+        // Handle the actual API response structure
+        if (marketPrice.data.bestAskPrice && marketPrice.data.bestBidPrice) {
+          const midPrice = (marketPrice.data.bestAskPrice + marketPrice.data.bestBidPrice) / 2;
+          message += `**Current Price:** $${midPrice.toFixed(3)}\n`;
+          message += `Bid: $${marketPrice.data.bestBidPrice} | Ask: $${marketPrice.data.bestAskPrice}\n\n`;
+        } else if (marketPrice.data.price) {
+          message += `**Current Price:** $${marketPrice.data.price}\n\n`;
+                } else {
+          message += `**Price:** Data format not recognized\n\n`;
+                }
+              } else {
+        message += `**Price:** Unable to fetch current price\n\n`;
+      }
+
 
       if (marketInfo.success && marketInfo.data && marketInfo.data.length > 0) {
         const data = marketInfo.data[0];
@@ -1434,7 +1496,7 @@ export class Bot {
           const tickSize = data.tick_size || 'N/A';
           const maintenanceMargin = data.maintenance_margin || 'N/A';
 
-          message += `**Trading Parameters**\n`;
+          message += `*Trading Parameters*\n`;
           message += `Max Leverage: ${maxLeverage}x\n`;
           message += `Min Order: ${minLots} lots\n`;
           message += `Max Order: ${maxLots} lots\n`;
@@ -1443,25 +1505,6 @@ export class Bot {
           message += `Maintenance Margin: ${maintenanceMargin}\n\n`;
         }
       }
-
-      // Add current price information
-      if (marketPrice.success && marketPrice.data) {
-        // Handle the actual API response structure
-        if (marketPrice.data.bestAskPrice && marketPrice.data.bestBidPrice) {
-          const midPrice = (marketPrice.data.bestAskPrice + marketPrice.data.bestBidPrice) / 2;
-          message += `**Current Price:** $${midPrice.toFixed(3)}\n`;
-          message += `Bid: $${marketPrice.data.bestBidPrice} | Ask: $${marketPrice.data.bestAskPrice}\n\n`;
-        } else if (marketPrice.data.price) {
-          message += `**Current Price:** $${marketPrice.data.price}\n\n`;
-        } else {
-          message += `**Price:** Data format not recognized\n\n`;
-        }
-      } else {
-        message += `**Price:** Unable to fetch current price\n\n`;
-      }
-
-      message += `**Trading Actions**\n`;
-      message += `Choose an action to trade this market:`;
 
       const keyboard = new InlineKeyboard()
         .text("🟢 Long (Buy)", `order_type_${marketId}_long`)
@@ -1476,7 +1519,7 @@ export class Bot {
         parse_mode: "Markdown",
         reply_markup: keyboard
       });
-    } catch (error) {
+        } catch (error) {
       console.error("Error showing market details:", error);
       ctx.reply("❌ Error loading market details. Please try again.", {
         reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "markets")
@@ -1499,11 +1542,62 @@ export class Bot {
         return;
       }
 
-      const message = `📈 *${market.asset} Chart*\n\n` +
-        `Chart functionality coming soon!\n\n` +
-        `For now, you can view charts on the Kana Labs website.`;
+      console.log(`🔍 [CHART] Fetching trade data for ${marketId}`);
+
+      // Get current market price and recent trades
+      const [marketPrice, recentTrades] = await Promise.all([
+        this.kanaLabsPerps.getMarketPrice(marketId).catch(err => {
+          console.error(`❌ [CHART] Error fetching market price:`, err.message);
+          return { success: false, data: null, message: err.message };
+        }),
+        this.kanaLabsPerps.getAllTrades(this.APTOS_ADDRESS, marketId).catch(err => {
+          console.error(`❌ [CHART] Error fetching trades:`, err.message);
+          return { success: false, data: [], message: err.message };
+        })
+      ]);
+
+      let message = `📈 *${market.asset} - Price Chart*\n\n`;
+
+      // Show current price
+      if (marketPrice.success && marketPrice.data) {
+        if (marketPrice.data.bestAskPrice && marketPrice.data.bestBidPrice) {
+          const midPrice = (marketPrice.data.bestAskPrice + marketPrice.data.bestBidPrice) / 2;
+          message += `**Current Price:** $${midPrice.toFixed(3)}\n`;
+          message += `Bid: $${marketPrice.data.bestBidPrice} | Ask: $${marketPrice.data.bestAskPrice}\n\n`;
+        } else if (marketPrice.data.price) {
+          message += `**Current Price:** $${marketPrice.data.price}\n\n`;
+        }
+      }
+
+      // Show recent trade activity
+      if (recentTrades.success && recentTrades.data && recentTrades.data.length > 0) {
+        const trades = recentTrades.data.slice(0, 10); // Show last 10 trades
+        const totalVolume = trades.reduce((sum, trade) => sum + parseFloat(trade.size), 0);
+        const avgPrice = trades.reduce((sum, trade) => sum + parseFloat(trade.price), 0) / trades.length;
+
+        message += `**Recent Activity (Last 10 Trades)**\n`;
+        message += `Total Volume: ${totalVolume.toFixed(2)} lots\n`;
+        message += `Average Price: $${avgPrice.toFixed(3)}\n\n`;
+
+        message += `**Recent Trades:**\n`;
+        trades.slice(0, 5).forEach((trade, index) => {
+          const side = trade.side ? '🟢 Long' : '🔴 Short';
+          const time = new Date(parseInt(trade.timestamp) * 1000).toLocaleTimeString();
+          message += `${index + 1}. ${side} ${trade.size} @ $${trade.price} (${time})\n`;
+        });
+
+        if (trades.length > 5) {
+          message += `... and ${trades.length - 5} more trades\n`;
+        }
+      } else {
+        message += `**Recent Activity:** No trade data available\n`;
+      }
+
+      message += `\n**Note:** This shows recent trade activity.\n`;
+      message += `For detailed charts, use external charting tools.`;
 
       const keyboard = new InlineKeyboard()
+        .text("🔄 Refresh", `chart_${marketId}`)
         .text("🔙 Back to Market", `select_market_${marketId}`);
 
       ctx.reply(message, {
@@ -1531,16 +1625,40 @@ export class Bot {
         return;
       }
 
-      // Order book data is not available through the current API
-      // const orderbookResult = await this.kanaLabsPerps.getOrderBook(marketId);
+      console.log(`🔍 [ORDER_BOOK] Fetching market price for ${marketId}`);
 
-      let message = `📊 *${market.asset} Order Book*\n\n`;
-      message += `Order book data is not available through the current API.\n`;
-      message += `This feature will be implemented when the API supports it.\n\n`;
-      message += `**Available Actions:**\n`;
-      message += `• View current market price\n`;
-      message += `• Place market orders\n`;
-      message += `• View your positions and orders\n`;
+      // Get current market price (best bid/ask)
+      const marketPrice = await this.kanaLabsPerps.getMarketPrice(marketId).catch(err => {
+        console.error(`❌ [ORDER_BOOK] Error fetching market price:`, err.message);
+        return { success: false, data: null, message: err.message };
+      });
+
+      let message = `📊 *${market.asset} - Order Book*\n\n`;
+
+      if (marketPrice.success && marketPrice.data) {
+        if (marketPrice.data.bestAskPrice && marketPrice.data.bestBidPrice) {
+          const spread = marketPrice.data.bestAskPrice - marketPrice.data.bestBidPrice;
+          const spreadPercent = (spread / marketPrice.data.bestBidPrice) * 100;
+
+          message += `**Current Market Data**\n`;
+          message += `Best Bid: $${marketPrice.data.bestBidPrice}\n`;
+          message += `Best Ask: $${marketPrice.data.bestAskPrice}\n`;
+          message += `Spread: $${spread.toFixed(4)} (${spreadPercent.toFixed(2)}%)\n\n`;
+
+          // Calculate mid price
+          const midPrice = (marketPrice.data.bestAskPrice + marketPrice.data.bestBidPrice) / 2;
+          message += `Mid Price: $${midPrice.toFixed(3)}\n\n`;
+        } else if (marketPrice.data.price) {
+          message += `**Current Price:** $${marketPrice.data.price}\n\n`;
+        } else {
+          message += `**Price Data:** Format not recognized\n\n`;
+        }
+      } else {
+        message += `**Price Data:** Unable to fetch\n\n`;
+      }
+
+      message += `**Note:** Full order book depth is not available.\n`;
+      message += `This shows the best bid/ask prices only.`;
 
       const keyboard = new InlineKeyboard()
         .text("🔄 Refresh", `orderbook_${marketId}`)
@@ -1578,8 +1696,8 @@ export class Bot {
       let message = `🎯 *Create Order - ${market.asset}*\n\n`;
       message += `Market: ${market.asset}\n`;
       message += `Side: ${sideEmoji} ${sideText}\n\n`;
-      message += `Enter order size (amount in USDC):\n`;
-      message += `Example: 100 (for $100 USDC)`;
+      message += `Enter order size (amount in USDT):\n`;
+      message += `Example: 100 (for $100 USDT)`;
 
       const keyboard = new InlineKeyboard()
         .text("❌ Cancel", `select_market_${marketId}`);
@@ -1597,8 +1715,8 @@ export class Bot {
           step: 'order_size_input',
           orderData: { marketId, orderSide, market }
         });
-        }
-      } catch (error) {
+          }
+        } catch (error) {
       console.error("Error showing order size input:", error);
       ctx.reply("❌ Error loading order form. Please try again.", {
         reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "create_order")
@@ -1614,7 +1732,7 @@ export class Bot {
       let message = `🎯 *Order Confirmation*\n\n`;
       message += `Market: ${market.asset}\n`;
       message += `Side: ${sideEmoji} ${sideText}\n`;
-      message += `Size: $${size} USDC\n`;
+      message += `Size: $${size} USDT\n`;
       message += `Type: Market Order\n`;
       message += `Leverage: 1x (default)\n\n`;
       message += `⚠️ *This will place a market order immediately!*`;
@@ -1673,7 +1791,7 @@ export class Bot {
         const message = `✅ *Order Placed Successfully!*\n\n` +
           `Market: ${market.asset}\n` +
           `Side: ${sideEmoji} ${sideText}\n` +
-          `Size: $${size} USDC\n` +
+          `Size: $${size} USDT\n` +
           `Type: Market Order\n\n` +
           `Your order has been submitted to the market.`;
 
@@ -1687,7 +1805,7 @@ export class Bot {
           parse_mode: "Markdown",
           reply_markup: keyboard
         });
-      } else {
+            } else {
         ctx.reply(`❌ Order failed: ${orderResult.message || 'Unknown error'}`, {
           reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "create_order")
         });
@@ -1737,46 +1855,97 @@ export class Bot {
     }
   }
 
-  private async showDepositAmountPrompt(ctx: any, marketId: string) {
+  private async showDepositAmountPrompt(ctx: any) {
     try {
-      const markets = await this.getAvailableMarkets();
-      const market = markets.find(m => m.market_id === marketId);
+      // Get current wallet balance for percentage calculations
+      const walletBalance = await this.kanaLabsPerps.getWalletAccountBalance(this.APTOS_ADDRESS).catch(err => {
+        console.error(`❌ Error fetching wallet balance:`, err.message);
+        return { success: false, data: "0", message: err.message };
+      });
 
-      if (!market) {
-        ctx.reply("❌ Market not found.");
-      return;
-    }
+      const balance = walletBalance.success ? parseFloat(walletBalance.data) : 0;
 
-      // Store the deposit context for this user
-      const userId = ctx.from?.id;
-      if (userId) {
-        this.pendingDeposits.set(userId, {
-          marketId,
-          step: 'amount'
-        });
-      }
+      const message = "💰 *Deposit USDT*\n\n" +
+        `**Current Wallet Balance:** ${balance.toFixed(2)} USDT\n\n` +
+        "Choose deposit amount:";
 
       const keyboard = new InlineKeyboard()
-        .text("❌ Cancel", "deposit");
-
-      const message = `📥 *Deposit to ${market.base_name}*\n\n` +
-        `*Market:* ${market.base_name}\n` +
-        `*Max Leverage:* ${market.max_leverage}x\n` +
-        `*Min Amount:* ${market.min_lots} USDC\n\n` +
-        `Please enter the amount in USDC to deposit:\n` +
-        `(e.g., "100" for 100 USDC)`;
+        .text("25%", "deposit_25")
+        .text("50%", "deposit_50")
+        .row()
+        .text("75%", "deposit_75")
+        .text("100%", "deposit_100")
+        .row()
+        .text("Custom USDT", "deposit_custom")
+        .row()
+        .text("🔙 Back to Home", "start");
 
       ctx.reply(message, {
-      parse_mode: "Markdown",
+        parse_mode: "Markdown",
         reply_markup: keyboard
-    });
-  } catch (error) {
+      });
+    } catch (error) {
       console.error("Error showing deposit amount prompt:", error);
-      ctx.reply("❌ Error loading deposit form. Please try again.");
+      ctx.reply("❌ Error loading deposit prompt. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Home", "start")
+      });
     }
   }
 
-  private async handleDepositAmountInput(ctx: any, pendingDeposit: any, amountText: string) {
+  private async handleDepositPercentage(ctx: any, percentage: number) {
+    try {
+      // Get current wallet balance
+      const walletBalance = await this.kanaLabsPerps.getWalletAccountBalance(this.APTOS_ADDRESS).catch(err => {
+        console.error(`❌ Error fetching wallet balance:`, err.message);
+        return { success: false, data: "0", message: err.message };
+      });
+
+      const balance = walletBalance.success ? parseFloat(walletBalance.data) : 0;
+      const amount = (balance * percentage).toFixed(2);
+
+      // Show confirmation directly
+      await this.showDepositConfirmation(ctx, amount);
+    } catch (error) {
+      console.error("Error handling deposit percentage:", error);
+      ctx.reply("❌ Error calculating deposit amount. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Deposit", "deposit")
+      });
+    }
+  }
+
+  private async promptDepositCustomAmount(ctx: any) {
+    try {
+      const userId = ctx.from?.id;
+      if (!userId) {
+        ctx.reply("❌ Error: User not found.");
+        return;
+      }
+
+      // Set pending state for custom amount input
+      this.pendingDeposits.set(userId, {
+        step: "custom_amount"
+      });
+
+      const message = "💰 *Custom Deposit Amount*\n\n" +
+        "Enter the exact USDT amount you want to deposit:\n" +
+        "(e.g., 50, 100.5, 250.75)";
+
+      const keyboard = new InlineKeyboard()
+        .text("🔙 Back to Deposit", "deposit");
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      console.error("Error prompting custom deposit amount:", error);
+      ctx.reply("❌ Error loading custom amount prompt. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Deposit", "deposit")
+      });
+    }
+  }
+
+  private async handleDepositCustomAmountInput(ctx: any, amountText: string) {
     try {
       const amount = parseFloat(amountText);
 
@@ -1785,37 +1954,38 @@ export class Bot {
         return;
       }
 
-      // Update pending deposit with amount
-      pendingDeposit.amount = amountText;
-      this.pendingDeposits.set(ctx.from.id, pendingDeposit);
-
-      // Show confirmation
-      await this.showDepositConfirmation(ctx, pendingDeposit);
-  } catch (error) {
-      console.error("Error handling deposit amount input:", error);
-      ctx.reply("❌ Error processing amount. Please try again.");
+      // Show confirmation directly
+      await this.showDepositConfirmation(ctx, amount.toFixed(2));
+    } catch (error) {
+      console.error("Error handling custom deposit amount:", error);
+      ctx.reply("❌ Error processing deposit amount. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Deposit", "deposit")
+      });
     }
   }
 
-  private async showDepositConfirmation(ctx: any, pendingDeposit: any) {
-    try {
-      const markets = await this.getAvailableMarkets();
-      const market = markets.find(m => m.market_id === pendingDeposit.marketId);
 
-      if (!market) {
-        ctx.reply("❌ Market not found.");
+  private async showDepositConfirmation(ctx: any, amount: string) {
+    try {
+      const userId = ctx.from?.id;
+      if (!userId) {
+        ctx.reply("❌ Error: User not found.");
         return;
       }
 
+      // Store the amount for execution
+      this.pendingDeposits.set(userId, {
+        step: "confirmation",
+        amount: amount
+      });
+
       const keyboard = new InlineKeyboard()
-        .text("✅ Confirm Deposit", `confirm_deposit_${pendingDeposit.marketId}`)
+        .text("✅ Confirm Deposit", "confirm_deposit")
         .text("❌ Cancel", "deposit");
 
       const message = `📥 *Confirm Deposit*\n\n` +
-        `*Market:* ${market.base_name}\n` +
-        `*Amount:* ${pendingDeposit.amount} USDC\n` +
-        `*Max Leverage:* ${market.max_leverage}x\n\n` +
-        `⚠️ *This will deposit USDC to your Kana Labs perps account!*`;
+        `*Amount:* ${amount} USDT\n\n` +
+        `⚠️ *This will deposit USDT to your Kana Labs trading account!*`;
 
       ctx.reply(message, {
         parse_mode: "Markdown",
@@ -1827,7 +1997,7 @@ export class Bot {
     }
   }
 
-  private async executeDeposit(ctx: any, marketId: string) {
+  private async executeDeposit(ctx: any) {
     try {
       const userId = ctx.from?.id;
       if (!userId) {
@@ -1836,7 +2006,7 @@ export class Bot {
       }
 
       const pendingDeposit = this.pendingDeposits.get(userId);
-      if (!pendingDeposit || pendingDeposit.marketId !== marketId) {
+      if (!pendingDeposit) {
         ctx.reply("❌ Error: Deposit session expired. Please start over.");
       return;
     }
@@ -1846,7 +2016,6 @@ export class Bot {
 
       // Call Kana Labs deposit API
       const depositResult = await this.kanaLabsPerps.deposit({
-        marketId: marketId,
         amount: pendingDeposit.amount || '0'
       });
 
@@ -1855,8 +2024,7 @@ export class Bot {
 
       // Show success message
       const message = `✅ *Deposit Successful!*\n\n` +
-        `*Market:* ${marketId}\n` +
-        `*Amount:* ${pendingDeposit.amount} USDC\n` +
+        `*Amount:* ${pendingDeposit.amount} USDT\n` +
         `*Transaction:* \`${JSON.stringify(depositResult.data)}\`\n\n` +
         `Your deposit has been processed successfully!`;
 
@@ -1873,6 +2041,160 @@ export class Bot {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       ctx.reply(`❌ Deposit failed: ${errorMessage}`, {
         reply_markup: new InlineKeyboard().text("🔙 Back to Deposit", "deposit")
+      });
+    }
+  }
+
+  private async showWithdrawMenu(ctx: any) {
+    try {
+      // Get current account balances
+      const [walletBalance, profileBalance] = await Promise.all([
+        this.kanaLabsPerps.getWalletAccountBalance(this.APTOS_ADDRESS).catch(err => {
+          console.error(`❌ Error fetching wallet balance:`, err.message);
+          return { success: false, data: "0", message: err.message };
+        }),
+        this.kanaLabsPerps.getProfileBalanceSnapshot(this.APTOS_ADDRESS).catch(err => {
+          console.error(`❌ Error fetching profile balance:`, err.message);
+          return { success: false, data: "0", message: err.message };
+        })
+      ]);
+
+      let message = "📤 *Withdraw from Kana Labs Perps*\n\n";
+      message += "**Current Account Balances:**\n";
+      message += `Wallet: ${walletBalance.success ? walletBalance.data : 'N/A'} USDT\n`;
+      message += `Trading Account: ${profileBalance.success ? profileBalance.data : 'N/A'} USDT\n\n`;
+      message += "Withdraw USDT from your Kana Labs trading account.\n";
+      message += "This will move funds from your trading account to your wallet.";
+
+      const keyboard = new InlineKeyboard()
+        .text("💸 Withdraw USDT", "withdraw_amount")
+        .row()
+        .text("🔙 Back to Home", "start");
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      console.error("Error showing withdraw menu:", error);
+      ctx.reply("❌ Error loading withdraw options. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Home", "start")
+      });
+    }
+  }
+
+  private async showWithdrawAmountPrompt(ctx: any) {
+    try {
+      const userId = ctx.from?.id;
+      if (userId) {
+        this.pendingDeposits.set(userId, {
+          step: 'withdraw_amount'
+        });
+      }
+
+      const keyboard = new InlineKeyboard()
+        .text("❌ Cancel", "withdraw");
+
+      const message = `📤 *Withdraw from Kana Labs Trading Account*\n\n` +
+        `Please enter the amount in USDT to withdraw:\n` +
+        `(Enter a number, e.g., 50, 100, 250)\n\n` +
+        `This will move USDT from your trading account to your wallet.`;
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      console.error("Error showing withdraw amount prompt:", error);
+      ctx.reply("❌ Error loading withdraw form. Please try again.");
+    }
+  }
+
+  private async handleWithdrawAmountInput(ctx: any, pendingDeposit: any, amountText: string) {
+    try {
+      const amount = parseFloat(amountText);
+
+      if (isNaN(amount) || amount <= 0) {
+        ctx.reply("❌ Invalid amount. Please enter a positive number (e.g., 50, 100, 250):");
+      return;
+    }
+
+      // Update pending deposit with amount
+      pendingDeposit.amount = amountText;
+      this.pendingDeposits.set(ctx.from.id, pendingDeposit);
+
+      // Show confirmation
+      await this.showWithdrawConfirmation(ctx, pendingDeposit);
+    } catch (error) {
+      console.error("Error handling withdraw amount input:", error);
+      ctx.reply("❌ Error processing withdraw amount. Please try again.");
+    }
+  }
+
+  private async showWithdrawConfirmation(ctx: any, pendingDeposit: any) {
+    try {
+      const keyboard = new InlineKeyboard()
+        .text("✅ Confirm Withdraw", "confirm_withdraw")
+        .text("❌ Cancel", "withdraw");
+
+      const message = `📤 *Confirm Withdraw*\n\n` +
+        `**Amount:** ${pendingDeposit.amount} USDT\n\n` +
+        `⚠️ *This will withdraw USDT from your Kana Labs trading account!*`;
+
+      ctx.reply(message, {
+      parse_mode: "Markdown",
+        reply_markup: keyboard
+    });
+  } catch (error) {
+      console.error("Error showing withdraw confirmation:", error);
+      ctx.reply("❌ Error loading withdraw confirmation. Please try again.");
+    }
+  }
+
+  private async executeWithdraw(ctx: any) {
+    try {
+      const userId = ctx.from?.id;
+      if (!userId) {
+        ctx.reply("❌ Error: User not found.");
+        return;
+      }
+
+      const pendingDeposit = this.pendingDeposits.get(userId);
+      if (!pendingDeposit) {
+        ctx.reply("❌ Error: Withdraw session expired. Please start over.");
+        return;
+      }
+
+      await ctx.reply("🔄 Processing withdraw... Please wait.");
+
+      // Call Kana Labs withdraw API (account-level, no specific market)
+      const withdrawResult = await this.kanaLabsPerps.withdraw({
+        amount: pendingDeposit.amount || '0'
+      });
+
+      // Clear pending deposit
+      this.pendingDeposits.delete(userId);
+
+      if (withdrawResult.success) {
+        const message = `✅ *Withdraw Successful!*\n\n` +
+          `**Amount:** ${pendingDeposit.amount} USDT\n` +
+          `**Transaction:** \`${JSON.stringify(withdrawResult.data)}\`\n\n` +
+          `Your withdraw has been processed successfully!`;
+
+        ctx.reply(message, {
+          parse_mode: "Markdown",
+          reply_markup: new InlineKeyboard().text("🔙 Back to Home", "start")
+        });
+      } else {
+        ctx.reply(`❌ Withdraw failed: ${withdrawResult.message}`, {
+          reply_markup: new InlineKeyboard().text("🔙 Back to Withdraw", "withdraw")
+        });
+      }
+    } catch (error) {
+      console.error("Error executing withdraw:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Withdraw failed: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Withdraw", "withdraw")
       });
     }
   }
@@ -2451,7 +2773,7 @@ export class Bot {
 
       case 'deposit':
         return `🗳️ *Vote Required: Deposit to ${data.marketName}*\n\n` +
-          `Amount: ${data.amount} USDC\n` +
+          `Amount: ${data.amount} USDT\n` +
           `Market: ${data.marketName}\n` +
           `Max Leverage: ${data.maxLeverage}x\n\n` +
           `Vote to approve or reject this deposit.`;

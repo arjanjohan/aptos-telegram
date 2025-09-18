@@ -101,12 +101,10 @@ export interface LastExecutionPrice {
 }
 
 export interface DepositParams {
-  marketId: string;
   amount: string;
 }
 
 export interface WithdrawParams {
-  marketId: string;
   amount: string;
 }
 
