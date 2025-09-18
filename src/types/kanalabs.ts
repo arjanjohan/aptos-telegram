@@ -107,6 +107,8 @@ export interface DepositParams {
 
 export interface WithdrawParams {
   amount: string;
+  userAddress: string;
+  marketIds: string;
 }
 
 export interface PlaceOrderParams {

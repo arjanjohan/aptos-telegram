@@ -108,7 +108,7 @@ export class KanaLabsPerpsService {
    * Withdraw funds from a specific market
    */
   async withdraw(params: WithdrawParams): Promise<ApiResponse<OrderPayload>> {
-    return this.makeRequest<OrderPayload>('/withdraw', params, 'POST');
+    return this.makeRequest<OrderPayload>('/withdrawMultipleMarkets', params, 'GET');
   }
 
   /**

@@ -134,6 +134,9 @@ export class Bot {
       } else if (pendingDeposit && pendingDeposit.step === 'withdraw_amount') {
         await this.handleWithdrawAmountInput(ctx, pendingDeposit, text);
         return;
+      } else if (pendingDeposit && pendingDeposit.step === 'custom_withdraw_amount') {
+        await this.handleWithdrawCustomAmountInput(ctx, text);
+        return;
       }
 
       // Check if it's a number command like /1, /2, etc. (only if not in input mode)
@@ -309,6 +312,16 @@ export class Bot {
         await this.showWithdrawAmountPrompt(ctx);
       } else if (data === "confirm_withdraw") {
         await this.executeWithdraw(ctx);
+      } else if (data === "withdraw_25") {
+        await this.handleWithdrawPercentage(ctx, 0.25);
+      } else if (data === "withdraw_50") {
+        await this.handleWithdrawPercentage(ctx, 0.50);
+      } else if (data === "withdraw_75") {
+        await this.handleWithdrawPercentage(ctx, 0.75);
+      } else if (data === "withdraw_100") {
+        await this.handleWithdrawPercentage(ctx, 1.00);
+      } else if (data === "withdraw_custom") {
+        await this.promptWithdrawCustomAmount(ctx);
       }
     });
 
@@ -1828,6 +1841,10 @@ export class Bot {
     }
   }
 
+  private getTestnetMarketIds(): string[] {
+    return ["1338", "1339", "1340", "2387"];
+  }
+
   private async getAvailableMarkets() {
     // Try to fetch from API first, fallback to hardcoded
     try {
@@ -1972,6 +1989,78 @@ export class Bot {
     }
   }
 
+  private async handleWithdrawPercentage(ctx: any, percentage: number) {
+    try {
+      // Get current trading account balance
+      const profileBalance = await this.kanaLabsPerps.getProfileBalanceSnapshot(this.APTOS_ADDRESS).catch(err => {
+        console.error(`❌ Error fetching profile balance:`, err.message);
+        return { success: false, data: "0", message: err.message };
+      });
+
+      const balance = profileBalance.success ? parseFloat(profileBalance.data) : 0;
+      const amount = (balance * percentage).toFixed(2);
+
+      // Show confirmation directly
+      await this.showWithdrawConfirmation(ctx, { amount });
+    } catch (error) {
+      console.error("Error handling withdraw percentage:", error);
+      ctx.reply("❌ Error calculating withdraw amount. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Withdraw", "withdraw")
+      });
+    }
+  }
+
+  private async promptWithdrawCustomAmount(ctx: any) {
+    try {
+      const userId = ctx.from?.id;
+      if (!userId) {
+        ctx.reply("❌ Error: User not found.");
+        return;
+      }
+
+      // Set pending state for custom amount input
+      this.pendingDeposits.set(userId, {
+        step: "custom_withdraw_amount"
+      });
+
+      const message = "📤 *Custom Withdraw Amount*\n\n" +
+        "Enter the exact USDT amount you want to withdraw:\n" +
+        "(e.g., 50, 100.5, 250.75)";
+
+      const keyboard = new InlineKeyboard()
+        .text("🔙 Back to Withdraw", "withdraw");
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      console.error("Error prompting custom withdraw amount:", error);
+      ctx.reply("❌ Error loading custom amount prompt. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Withdraw", "withdraw")
+      });
+    }
+  }
+
+  private async handleWithdrawCustomAmountInput(ctx: any, amountText: string) {
+    try {
+      const amount = parseFloat(amountText);
+
+      if (isNaN(amount) || amount <= 0) {
+        ctx.reply("❌ Invalid amount. Please enter a positive number.");
+        return;
+      }
+
+      // Show confirmation directly
+      await this.showWithdrawConfirmation(ctx, { amount: amount.toFixed(2) });
+    } catch (error) {
+      console.error("Error handling custom withdraw amount:", error);
+      ctx.reply("❌ Error processing withdraw amount. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Withdraw", "withdraw")
+      });
+    }
+  }
+
 
   private async showDepositConfirmation(ctx: any, amount: string) {
     try {
@@ -2097,15 +2186,22 @@ export class Bot {
         })
       ]);
 
+      const tradingBalance = profileBalance.success ? parseFloat(profileBalance.data) : 0;
+
       let message = "📤 *Withdraw from Kana Labs Perps*\n\n";
       message += "**Current Account Balances:**\n";
       message += `Wallet: ${walletBalance.success ? walletBalance.data : 'N/A'} USDT\n`;
       message += `Trading Account: ${profileBalance.success ? profileBalance.data : 'N/A'} USDT\n\n`;
-      message += "Withdraw USDT from your Kana Labs trading account.\n";
-      message += "This will move funds from your trading account to your wallet.";
+      message += "Choose withdraw amount:";
 
       const keyboard = new InlineKeyboard()
-        .text("💸 Withdraw USDT", "withdraw_amount")
+        .text("25%", "withdraw_25")
+        .text("50%", "withdraw_50")
+        .row()
+        .text("75%", "withdraw_75")
+        .text("100%", "withdraw_100")
+        .row()
+        .text("Custom USDT", "withdraw_custom")
         .row()
         .text("🔙 Back to Home", "start");
 
@@ -2154,36 +2250,44 @@ export class Bot {
 
       if (isNaN(amount) || amount <= 0) {
         ctx.reply("❌ Invalid amount. Please enter a positive number (e.g., 50, 100, 250):");
-      return;
-    }
+        return;
+      }
 
-      // Update pending deposit with amount
-      pendingDeposit.amount = amountText;
-      this.pendingDeposits.set(ctx.from.id, pendingDeposit);
-
-      // Show confirmation
-      await this.showWithdrawConfirmation(ctx, pendingDeposit);
+      // Show confirmation with new format
+      await this.showWithdrawConfirmation(ctx, { amount: amountText });
     } catch (error) {
       console.error("Error handling withdraw amount input:", error);
       ctx.reply("❌ Error processing withdraw amount. Please try again.");
     }
   }
 
-  private async showWithdrawConfirmation(ctx: any, pendingDeposit: any) {
+  private async showWithdrawConfirmation(ctx: any, data: { amount: string }) {
     try {
+      const userId = ctx.from?.id;
+      if (!userId) {
+        ctx.reply("❌ Error: User not found.");
+        return;
+      }
+
+      // Store the amount for execution
+      this.pendingDeposits.set(userId, {
+        step: "confirmation",
+        amount: data.amount
+      });
+
       const keyboard = new InlineKeyboard()
         .text("✅ Confirm Withdraw", "confirm_withdraw")
         .text("❌ Cancel", "withdraw");
 
       const message = `📤 *Confirm Withdraw*\n\n` +
-        `**Amount:** ${pendingDeposit.amount} USDT\n\n` +
+        `*Amount:* ${data.amount} USDT\n\n` +
         `⚠️ *This will withdraw USDT from your Kana Labs trading account!*`;
 
       ctx.reply(message, {
-      parse_mode: "Markdown",
+        parse_mode: "Markdown",
         reply_markup: keyboard
-    });
-  } catch (error) {
+      });
+    } catch (error) {
       console.error("Error showing withdraw confirmation:", error);
       ctx.reply("❌ Error loading withdraw confirmation. Please try again.");
     }
@@ -2203,31 +2307,65 @@ export class Bot {
         return;
       }
 
+      // Show processing message
       await ctx.reply("🔄 Processing withdraw... Please wait.");
 
-      // Call Kana Labs withdraw API (account-level, no specific market)
+      // Get all testnet market IDs
+      const testnetMarketIds = this.getTestnetMarketIds();
+
+      // Call Kana Labs withdraw API to get transaction payload
       const withdrawResult = await this.kanaLabsPerps.withdraw({
-        amount: pendingDeposit.amount || '0'
+        amount: pendingDeposit.amount || '0',
+        userAddress: this.APTOS_ADDRESS,
+        marketIds: testnetMarketIds.join(','),
+      });
+
+      if (!withdrawResult.success) {
+        throw new Error(withdrawResult.message);
+      }
+
+      // Convert Kana Labs payload to Aptos format
+      const transactionPayload = withdrawResult.data;
+      const aptosPayload : InputEntryFunctionData = {
+        function: transactionPayload.function as MoveFunctionId,
+        functionArguments: transactionPayload.functionArguments,
+        typeArguments: transactionPayload.typeArguments
+      };
+
+      // Build the transaction
+      const transaction = await this.aptos.transaction.build.simple({
+        sender: this.APTOS_ADDRESS,
+        data: aptosPayload
+      });
+
+      // Sign and submit the transaction
+      const committedTxn = await this.aptos.transaction.signAndSubmitTransaction({
+        transaction: transaction,
+        signer: this.aptosAccount,
+      });
+
+      // Wait for transaction confirmation
+      await this.aptos.waitForTransaction({
+        transactionHash: committedTxn.hash,
       });
 
       // Clear pending deposit
       this.pendingDeposits.delete(userId);
 
-      if (withdrawResult.success) {
-        const message = `✅ *Withdraw Successful!*\n\n` +
-          `**Amount:** ${pendingDeposit.amount} USDT\n` +
-          `**Transaction:** \`${JSON.stringify(withdrawResult.data)}\`\n\n` +
-          `Your withdraw has been processed successfully!`;
+      // Show success message
+      const message = `✅ *Withdraw Successful!*\n\n` +
+        `*Amount:* ${pendingDeposit.amount} USDT\n` +
+        `*Transaction Hash:* \`${committedTxn.hash}\`\n\n` +
+        `Your withdraw has been processed successfully!`;
 
-        ctx.reply(message, {
-          parse_mode: "Markdown",
-          reply_markup: new InlineKeyboard().text("🔙 Back to Home", "start")
-        });
-      } else {
-        ctx.reply(`❌ Withdraw failed: ${withdrawResult.message}`, {
-          reply_markup: new InlineKeyboard().text("🔙 Back to Withdraw", "withdraw")
-        });
-      }
+      const keyboard = new InlineKeyboard()
+        .text("🔙 Back to Home", "start");
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+
     } catch (error) {
       console.error("Error executing withdraw:", error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
