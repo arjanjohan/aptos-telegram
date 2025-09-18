@@ -102,6 +102,7 @@ export interface LastExecutionPrice {
 
 export interface DepositParams {
   amount: string;
+  userAddress: string;
 }
 
 export interface WithdrawParams {

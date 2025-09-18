@@ -46,19 +46,16 @@ export class KanaLabsPerpsService {
   ): Promise<ApiResponse<T>> {
     try {
       const url = `${this.baseURL}${endpoint}`;
-      const config = {
-        headers: {
-          'x-api-key': this.apiKey,
-        },
-        ...(method === 'GET' ? { params } : { data: params })
+      const headers = {
+        'x-api-key': this.apiKey,
       };
 
       console.log(`🔍 [KANA_API] Making ${method} request to: ${url}`);
-      console.log(`🔍 [KANA_API] Request config:`, { headers: config.headers, params: method === 'GET' ? params : undefined, data: method === 'POST' ? params : undefined });
+      console.log(`🔍 [KANA_API] Request config:`, { headers, params: method === 'GET' ? params : undefined, data: method === 'POST' ? params : undefined });
 
       const response: AxiosResponse<ApiResponse<T>> = method === 'GET'
-        ? await axios.get(url, config)
-        : await axios.post(url, config);
+        ? await axios.get(url, { headers, params })
+        : await axios.post(url, params, { headers });
 
       console.log(`🔍 [KANA_API] Response status: ${response.status}`);
       console.log(`🔍 [KANA_API] Response data:`, response.data);
@@ -104,7 +101,7 @@ export class KanaLabsPerpsService {
    * Deposit funds to a specific market
    */
   async deposit(params: DepositParams): Promise<ApiResponse<OrderPayload>> {
-    return this.makeRequest<OrderPayload>('/deposit', params, 'POST');
+    return this.makeRequest<OrderPayload>('/deposit', params, 'GET');
   }
 
   /**

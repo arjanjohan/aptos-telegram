@@ -5,7 +5,7 @@
  */
 
 import { Bot as GrammyBot, InlineKeyboard } from "grammy";
-import { Aptos, AptosConfig, Account, Ed25519PrivateKey } from "@aptos-labs/ts-sdk";
+import { Aptos, AptosConfig, Account, Ed25519PrivateKey, type InputEntryFunctionData, type MoveFunctionId } from "@aptos-labs/ts-sdk";
 import { createHoldingsFetcher } from "../services/holdings-fetcher.js";
 import { getPrice, calculateUSDValue, getCoinList } from "../utils/usd-value-utils.js";
 import {
@@ -24,6 +24,7 @@ import { KanaLabsPerpsService } from "../services/kanalabs-perps.js";
 export class Bot {
   private bot: GrammyBot;
   private aptos: Aptos;
+  private aptosAccount: Account;
   private APTOS_ADDRESS: string;
   private APTOS_PRIVATE_KEY: string;
   private kanaLabsPerps: KanaLabsPerpsService;
@@ -51,6 +52,13 @@ export class Bot {
     this.aptos = new Aptos(new AptosConfig({ network: aptosConfig.network }));
     this.APTOS_ADDRESS = accountConfig.address;
     this.APTOS_PRIVATE_KEY = accountConfig.privateKey;
+
+    // Create Aptos account for signing transactions
+    const formattedPrivateKey = new Ed25519PrivateKey(this.APTOS_PRIVATE_KEY);
+    this.aptosAccount = Account.fromPrivateKey({
+      privateKey: formattedPrivateKey,
+    });
+
     this.kanaLabsPerps = new KanaLabsPerpsService();
 
     this.setupHandlers();
@@ -2008,15 +2016,45 @@ export class Bot {
       const pendingDeposit = this.pendingDeposits.get(userId);
       if (!pendingDeposit) {
         ctx.reply("❌ Error: Deposit session expired. Please start over.");
-      return;
-    }
+        return;
+      }
 
       // Show processing message
       await ctx.reply("🔄 Processing deposit... Please wait.");
 
-      // Call Kana Labs deposit API
+      // Call Kana Labs deposit API to get transaction payload
       const depositResult = await this.kanaLabsPerps.deposit({
-        amount: pendingDeposit.amount || '0'
+        amount: pendingDeposit.amount || '0',
+        userAddress: this.APTOS_ADDRESS
+      });
+
+      if (!depositResult.success) {
+        throw new Error(depositResult.message);
+      }
+
+      // Convert Kana Labs payload to Aptos format
+      const transactionPayload = depositResult.data;
+      const aptosPayload : InputEntryFunctionData = {
+        function: transactionPayload.function as MoveFunctionId,
+        functionArguments: transactionPayload.functionArguments,
+        typeArguments: transactionPayload.typeArguments
+      };
+
+      // Build the transaction
+      const transaction = await this.aptos.transaction.build.simple({
+        sender: this.APTOS_ADDRESS,
+        data: aptosPayload
+      });
+
+      // Sign and submit the transaction
+      const committedTxn = await this.aptos.transaction.signAndSubmitTransaction({
+        transaction: transaction,
+        signer: this.aptosAccount,
+      });
+
+      // Wait for transaction confirmation
+      await this.aptos.waitForTransaction({
+        transactionHash: committedTxn.hash,
       });
 
       // Clear pending deposit
@@ -2025,18 +2063,18 @@ export class Bot {
       // Show success message
       const message = `✅ *Deposit Successful!*\n\n` +
         `*Amount:* ${pendingDeposit.amount} USDT\n` +
-        `*Transaction:* \`${JSON.stringify(depositResult.data)}\`\n\n` +
+        `*Transaction Hash:* \`${committedTxn.hash}\`\n\n` +
         `Your deposit has been processed successfully!`;
 
       const keyboard = new InlineKeyboard()
-        .text("📊 Back to Home", "start");
+        .text(" Back to Home", "start");
 
       ctx.reply(message, {
-      parse_mode: "Markdown",
+        parse_mode: "Markdown",
         reply_markup: keyboard
-    });
+      });
 
-  } catch (error) {
+    } catch (error) {
       console.error("Error executing deposit:", error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       ctx.reply(`❌ Deposit failed: ${errorMessage}`, {
