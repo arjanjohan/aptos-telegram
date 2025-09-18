@@ -508,9 +508,10 @@ export class AptosHoldingsFetcher {
  * Creates a new AptosHoldingsFetcher instance with default configuration.
  */
 export function createHoldingsFetcher(config: Partial<HoldingsFetcherConfig> = {}): AptosHoldingsFetcher {
+  // Use default URLs if not provided in config
   const defaultConfig: HoldingsFetcherConfig = {
-    networkUrl: 'https://mainnet.aptoslabs.com/v1',
-    indexerUrl: 'https://indexer.mainnet.aptoslabs.com/v1/graphql',
+    networkUrl: 'https://testnet.aptoslabs.com/v1',
+    indexerUrl: 'https://api.testnet.aptoslabs.com/v1/graphql',
     ...config
   };
 

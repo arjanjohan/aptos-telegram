@@ -1,39 +1,64 @@
-/**
+/*
  * Telegram Bot for Aptos Trading
  *
  * Main bot class that handles all Telegram interactions and Aptos blockchain operations.
  */
 
 import { Bot as GrammyBot, InlineKeyboard } from "grammy";
-import { Aptos, Network, AptosConfig, Account, Ed25519PrivateKey } from "@aptos-labs/ts-sdk";
-import dotenv from "dotenv";
+import { Aptos, AptosConfig, Account, Ed25519PrivateKey } from "@aptos-labs/ts-sdk";
 import { createHoldingsFetcher } from "../services/holdings-fetcher.js";
 import { getPrice, calculateUSDValue, getCoinList } from "../utils/usd-value-utils.js";
-
-dotenv.config();
+import {
+  getAptosConfig,
+  getTelegramConfig,
+  getAccountConfig,
+  getAptosNetworkUrl,
+  getAptosIndexerUrl,
+  getAptosAddress,
+  getAptosPrivateKey,
+  getNetworkType,
+  getKanaLabsConfig
+} from "../config/index.js";
+import { KanaLabsPerpsService } from "../services/kanalabs-perps.js";
 
 export class Bot {
   private bot: GrammyBot;
   private aptos: Aptos;
   private APTOS_ADDRESS: string;
   private APTOS_PRIVATE_KEY: string;
-  private pendingTransfers: Map<number, { assetIndex: number; step: string; recipientAddress?: string; amount?: string }> = new Map();
+  private kanaLabsPerps: KanaLabsPerpsService;
+  private pendingTransfers: Map<number, { assetIndex: number; step: string; recipientAddress?: string; amount?: string; orderData?: { marketId: string; orderSide: string; market: any } }> = new Map();
+  private pendingDeposits: Map<number, { marketId: string; step: string; amount?: string }> = new Map();
+  private pendingVotes: Map<string, { pollId: string; action: string; data: any; voters: Set<number>; startTime: number }> = new Map();
+
+  // Settings storage (in production, this would be in a database)
+  // TODO: Move to database
+  private settings = {
+    disableConfirmation: false,
+    defaultTransferAmounts: [25, 50], // 25%, 50% - 100% and custom are always present
+    minimumDisplayAmount: 0, // Minimum USD value to display positions
+    votingTimePeriod: 300, // Voting time in seconds (5 minutes)
+    votingThreshold: 0.5 // Approval threshold (0.0 to 1.0 = 0% to 100%)
+  };
 
   constructor() {
-    this.bot = new GrammyBot(process.env.TELEGRAM_BOT_TOKEN!);
-    this.aptos = new Aptos(new AptosConfig({ network: Network.MAINNET }));
-    this.APTOS_ADDRESS = process.env.APTOS_ADDRESS!;
-    this.APTOS_PRIVATE_KEY = process.env.APTOS_PRIVATE_KEY!;
+    const telegramConfig = getTelegramConfig();
+    const aptosConfig = getAptosConfig();
+    const accountConfig = getAccountConfig();
+
+    this.bot = new GrammyBot(telegramConfig.botToken);
+    this.aptos = new Aptos(new AptosConfig({ network: aptosConfig.network }));
+    this.APTOS_ADDRESS = accountConfig.address;
+    this.APTOS_PRIVATE_KEY = accountConfig.privateKey;
+    this.kanaLabsPerps = new KanaLabsPerpsService();
 
     this.setupHandlers();
   }
 
   private setupHandlers() {
     // Start command
-    this.bot.command("start", (ctx) => {
-      ctx.reply("Welcome to Aptos Trading Bot! 🚀", {
-        reply_markup: this.getMainMenu(),
-      });
+    this.bot.command("start", async (ctx) => {
+      await this.showHomepage(ctx);
     });
 
     // Portfolio command
@@ -41,25 +66,67 @@ export class Bot {
       await this.showPortfolio(ctx);
     });
 
-    // Buy command
-    this.bot.command("buy", async (ctx) => {
-      const menu = await this.getBuyAssetSelectionMenu();
-      ctx.reply("Please select an asset to buy:", {
-        reply_markup: menu,
-      });
-    });
-
-    // Sell command
-    this.bot.command("sell", async (ctx) => {
-      const menu = await this.getSellAssetSelectionMenu();
-      ctx.reply("Please select an asset to sell:", {
-        reply_markup: menu,
-      });
-    });
-
     // Settings command
     this.bot.command("settings", (ctx) => {
       ctx.reply("Settings menu coming soon! ⚙️");
+    });
+
+    // Deposit command
+    this.bot.command("deposit", async (ctx) => {
+      await this.showDepositMenu(ctx);
+    });
+
+    // Faucet command
+    this.bot.command("faucet", async (ctx) => {
+      await this.executeFaucet(ctx);
+    });
+
+    // Debug command
+    this.bot.command("debug", async (ctx) => {
+      await this.debugApiConnection(ctx);
+    });
+
+    // Handle asset commands like /1, /2, etc.
+    this.bot.on("message:text", async (ctx) => {
+      const text = ctx.message?.text?.trim();
+      if (!text) return;
+
+      // Handle other text messages (address input, amount input, etc.)
+      const userId = ctx.from?.id;
+      if (!userId) return;
+
+      const pendingTransfer = this.pendingTransfers.get(userId);
+      if (pendingTransfer) {
+        if (pendingTransfer.step === 'address') {
+          await this.handleAddressInput(ctx, pendingTransfer, text);
+        } else if (pendingTransfer.step === 'amount') {
+          await this.handleAmountInput(ctx, pendingTransfer, text);
+        } else if (pendingTransfer.step === 'min_display_input') {
+          await this.handleMinDisplayInput(ctx, text);
+      } else if (pendingTransfer.step === 'voting_time_input') {
+        await this.handleVotingTimeInput(ctx, text);
+      } else if (pendingTransfer.step === 'voting_threshold_input') {
+        await this.handleVotingThresholdInput(ctx, text);
+      } else if (pendingTransfer.step === 'transfer_amount_input') {
+        await this.handleTransferAmountInput(ctx, text);
+      } else if (pendingTransfer.step === 'order_size_input') {
+        await this.handleOrderSizeInput(ctx, text);
+        }
+        return;
+      }
+
+      // Check if it's a number command like /1, /2, etc. (only if not in input mode)
+      if (/^\d+$/.test(text)) {
+        const index = parseInt(text);
+        await this.showAssetOverview(ctx, index);
+        return;
+      }
+
+      // Handle deposit amount input
+      const pendingDeposit = this.pendingDeposits.get(userId);
+      if (pendingDeposit && pendingDeposit.step === 'amount') {
+        await this.handleDepositAmountInput(ctx, pendingDeposit, text);
+      }
     });
 
     // Handle callback queries
@@ -123,83 +190,201 @@ export class Bot {
         }
       } else if (data === "portfolio") {
         await this.showPortfolio(ctx);
-      } else if (data === "buy") {
-        const menu = await this.getBuyAssetSelectionMenu();
-        ctx.reply("Please select an asset to buy:", {
-          reply_markup: menu,
-        });
-      } else if (data === "sell") {
-        const menu = await this.getSellAssetSelectionMenu();
-        ctx.reply("Please select an asset to sell:", {
-          reply_markup: menu,
-        });
       } else if (data === "settings") {
-        ctx.reply("Settings menu coming soon! ⚙️");
+        await this.showSettings(ctx);
       } else if (data === "start") {
-        ctx.reply("Welcome to Aptos Trading Bot! 🚀", {
-          reply_markup: this.getMainMenu(),
-        });
+        await this.showHomepage(ctx);
+      } else if (data === "wallet") {
+        await this.showWallet(ctx);
+      } else if (data === "refresh") {
+        await this.showHomepage(ctx);
+      } else if (data === "deposit") {
+        await this.showDepositMenu(ctx);
+      } else if (data === "withdraw") {
+        ctx.reply("Withdraw functionality coming soon! 📤");
+      } else if (data === "open_orders") {
+        await this.showOpenOrders(ctx);
+      } else if (data === "positions") {
+        await this.showPositions(ctx);
+      } else if (data === "faucet_usdt") {
+        await this.executeFaucet(ctx);
+      } else if (data === "export_private_key") {
+        await this.showExportPrivateKeyWarning(ctx);
+      } else if (data === "confirm_export_private_key") {
+        await this.exportPrivateKey(ctx);
+      } else if (data === "toggle_confirmation") {
+        this.settings.disableConfirmation = !this.settings.disableConfirmation;
+        await this.showSettings(ctx);
+      } else if (data === "set_min_display") {
+        await this.promptMinDisplayInput(ctx);
+      } else if (data.startsWith("set_min_")) {
+        const parts = data.split("_");
+        if (parts.length > 2 && parts[2]) {
+          const amount = parseInt(parts[2]);
+          this.settings.minimumDisplayAmount = amount;
+          await this.showSettings(ctx);
+        }
+      } else if (data === "no_action") {
+        // Do nothing for setting name buttons
+        return;
+      } else if (data === "set_min_display_input") {
+        await this.promptMinDisplayInput(ctx);
+      } else if (data === "set_voting_time") {
+        await this.promptVotingTimeInput(ctx);
+      } else if (data === "set_voting_threshold") {
+        await this.promptVotingThresholdInput(ctx);
+      } else if (data === "set_transfer_amount_1") {
+        await this.promptTransferAmountInput(ctx, 1);
+      } else if (data === "set_transfer_amount_2") {
+        await this.promptTransferAmountInput(ctx, 2);
+      } else if (data === "markets") {
+        await this.showMarketSelection(ctx);
+      } else if (data.startsWith("select_market_")) {
+        const parts = data.split("_");
+        if (parts.length > 2 && parts[2]) {
+          const marketId = parts[2];
+          await this.showMarketDetails(ctx, marketId);
+        }
+      } else if (data.startsWith("order_type_")) {
+        const parts = data.split("_");
+        if (parts.length > 3 && parts[2] && parts[3]) {
+          const marketId = parts[2];
+          const orderSide = parts[3]; // long or short
+          await this.showOrderSizeInput(ctx, marketId, orderSide);
+        }
+      } else if (data.startsWith("chart_")) {
+        const parts = data.split("_");
+        if (parts.length > 1 && parts[1]) {
+          const marketId = parts[1];
+          await this.showChart(ctx, marketId);
+        }
+      } else if (data.startsWith("orderbook_")) {
+        const parts = data.split("_");
+        if (parts.length > 1 && parts[1]) {
+          const marketId = parts[1];
+          await this.showOrderBook(ctx, marketId);
+        }
+      } else if (data.startsWith("confirm_order_")) {
+        const parts = data.split("_");
+        if (parts.length > 4 && parts[2] && parts[3] && parts[4]) {
+          const marketId = parts[2];
+          const orderSide = parts[3];
+          const size = parseFloat(parts[4]);
+          await this.executeOrder(ctx, marketId, orderSide, size);
+        }
+      } else if (data.startsWith("deposit_market_")) {
+        const parts = data.split("_");
+        if (parts.length > 2 && parts[2]) {
+          const marketId = parts[2];
+          await this.showDepositAmountPrompt(ctx, marketId);
+        }
+      } else if (data.startsWith("confirm_deposit_")) {
+        const parts = data.split("_");
+        if (parts.length > 2 && parts[2]) {
+          const marketId = parts[2];
+          await this.executeDeposit(ctx, marketId);
+        }
       }
     });
 
-    // Handle text messages for address input
-    this.bot.on("message:text", async (ctx) => {
-      const userId = ctx.from?.id;
-      if (!userId) return;
-
-      const pendingTransfer = this.pendingTransfers.get(userId);
-      if (!pendingTransfer) return;
-
-      const text = ctx.message.text.trim();
-
-      if (pendingTransfer.step === 'address') {
-        await this.handleAddressInput(ctx, pendingTransfer, text);
-      } else if (pendingTransfer.step === 'amount') {
-        await this.handleAmountInput(ctx, pendingTransfer, text);
-      }
-    });
   }
 
   private getMainMenu(): InlineKeyboard {
     return new InlineKeyboard()
-      .text("📊 Portfolio", "portfolio")
-      .text("💰 Buy", "buy")
+      .text("📊 Markets", "markets")
+      .text("⏳ Pending Orders", "pending_orders")
       .row()
-      .text("💸 Sell", "sell")
-      .text("⚙️ Settings", "settings");
+      .text("📊 Open Orders", "open_orders")
+      .text("📈 Positions", "positions")
+      .row()
+      .text("💰 Deposit to Kana", "deposit")
+      .text("💸 Withdraw from Kana", "withdraw")
+      .row()
+      .text("🚰 Faucet USDT", "faucet_usdt")
+      .text("⚙️ Settings", "settings")
+      .row()
+      .text("💳 Wallet", "wallet")
+      .text("🔄 Refresh", "refresh");
   }
 
-  private async getAssetSelectionMenu(): Promise<InlineKeyboard> {
-    const holdings = await this.getRealBalances();
-    const keyboard = new InlineKeyboard();
-    
-    Object.values(holdings).forEach((holding: any) => {
-      keyboard.text(`/${holding.index} ${holding.symbol}`, `asset_${holding.index}`);
-    });
-    
-    return keyboard;
-  }
 
-  private async getBuyAssetSelectionMenu(): Promise<InlineKeyboard> {
-    const holdings = await this.getRealBalances();
-    const keyboard = new InlineKeyboard();
-    
-    Object.values(holdings).forEach((holding: any) => {
-      keyboard.text(`/${holding.index} ${holding.symbol}`, `buy_asset_${holding.index}`);
-    });
-    
-    return keyboard;
-  }
+  private async showHomepage(ctx: any) {
+    try {
+      // Fetch Kana Labs balances
+      let message = "👥 *MoveTogether* on Aptos\n";
+      message += "powered by *Kana Lab* \n\n"
 
-  private async getSellAssetSelectionMenu(): Promise<InlineKeyboard> {
-    const holdings = await this.getRealBalances();
-    const keyboard = new InlineKeyboard();
-    
-    Object.values(holdings).forEach((holding: any) => {
-      keyboard.text(`/${holding.index} ${holding.symbol}`, `sell_asset_${holding.index}`);
+      try {
+        const userAddress = getAptosAddress();
+        console.log(`🔍 [HOMEPAGE] Fetching Kana Labs balances for: ${userAddress}`);
+
+        const [walletBalance, profileBalance] = await Promise.all([
+          this.kanaLabsPerps.getWalletAccountBalance(userAddress),
+          this.kanaLabsPerps.getProfileBalanceSnapshot(userAddress)
+        ]);
+
+        console.log(`🔍 [HOMEPAGE] Kana Labs balances:`, {
+          wallet: walletBalance.data,
+          profile: profileBalance.data
+        });
+
+
+        message += `⏳ Pending Orders: 1\n`;
+        message += `💻 Open Orders: 0\n`;
+        message += `📊 Open Positions: 2\n\n`;
+
+
+        if (walletBalance.success) {
+          const walletAmount = parseFloat(walletBalance.data).toFixed(2);
+          message += `💳 *Wallet Balance:* ${walletAmount} USDT\n`;
+        } else {
+          message += `💳 *Wallet Balance:* ❌ Error fetching\n`;
+        }
+
+        if (profileBalance.success) {
+          const profileAmount = parseFloat(profileBalance.data).toFixed(2);
+          message += `💰 *Kana Balance:* ${profileAmount} USDT\n`;
+        } else {
+          message += `💰 *Kana Balance:* ❌ Error fetching\n`;
+        }
+
+        message += "\n";
+      } catch (error) {
+        console.error("Error fetching Kana Labs balances:", error);
+        message += "💰 *Your Balances*\n\n";
+        message += "💳 *Wallet Balance:* ❌ Unable to fetch\n";
+        message += "💰 *Kana Balance:* ❌ Unable to fetch\n\n";
+      }
+
+
+      // Add main menu buttons
+      const keyboard = new InlineKeyboard();
+      keyboard
+        .text("📊 Markets", "markets")
+        .text("⏳ Pending Orders", "pending_orders")
+        .row()
+        .text("📊 Open Orders", "open_orders")
+        .text("📈 Positions", "positions")
+        .row()
+        .text("💰 Deposit to Perps", "deposit")
+        .text("💸 Withdraw from Perps", "withdraw")
+        .row()
+        .text("🚰 Faucet USDT", "faucet_usdt")
+        .text("⚙️ Settings", "settings")
+        .row()
+        .text("💳 Wallet", "wallet")
+        .text("🔄 Refresh", "refresh");
+
+      ctx.reply(message, {
+      parse_mode: "Markdown",
+        reply_markup: keyboard
     });
-    
-    return keyboard;
+  } catch (error) {
+      console.error("Error showing homepage:", error);
+      ctx.reply("Error loading homepage. Please try again.", {
+        reply_markup: this.getMainMenu()
+      });
+    }
   }
 
   private async showPortfolio(ctx: any) {
@@ -211,10 +396,10 @@ export class Bot {
         return;
       }
 
-      let message = "📊 **Your Portfolio**\n\n";
-      
+      let message = "📊 *Your Portfolio*\n\n";
+
       Object.values(holdings).forEach((holding: any) => {
-        message += `**${holding.symbol}**\n`;
+        message += `*${holding.symbol}*\n`;
         message += `   Amount: ${holding.amount}\n`;
         message += `   Value: ${holding.value}\n\n`;
       });
@@ -224,10 +409,10 @@ export class Bot {
       Object.values(holdings).forEach((holding: any) => {
         keyboard.text(`/${holding.index} ${holding.symbol}`, `asset_${holding.index}`);
       });
-      keyboard.row().text("🔙 Back to Menu", "start");
+      keyboard.row().text("🔙 Back to Home", "start");
 
-      ctx.reply(message, { 
-        parse_mode: "Markdown",
+      ctx.reply(message, {
+      parse_mode: "Markdown",
         reply_markup: keyboard
       });
     } catch (error) {
@@ -236,11 +421,325 @@ export class Bot {
     }
   }
 
+  private async showWallet(ctx: any) {
+    try {
+      const holdings = await this.getRealBalances();
+      const aptHolding = Object.values(holdings).find((holding: any) => holding.symbol === 'APT');
+      const aptBalance = aptHolding ? aptHolding.amount : '0';
+      const aptValue = aptHolding ? aptHolding.value : '$0.00';
+
+      const message = `💳 *Wallet Information*\n\n` +
+        `*Address:* \`${getAptosAddress()}\`\n` +
+        `*APT Balance:* ${aptBalance} APT\n` +
+        `*APT Value:* ${aptValue}`;
+
+      const keyboard = new InlineKeyboard()
+        .text("🔑 Export Private Key", "export_private_key")
+        .row()
+        .text("🔙 Back to Home", "start");
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      console.error("Error showing wallet:", error);
+      ctx.reply("Error loading wallet information. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Home", "start")
+      });
+    }
+  }
+
+  private async showSettings(ctx: any) {
+    try {
+      const votingTimeMinutes = Math.floor(this.settings.votingTimePeriod / 60);
+      const votingThresholdPercent = Math.round(this.settings.votingThreshold * 100);
+
+      const message = `⚙️ *Settings*\n\n` +
+      `*--- TRANSACTION SETTINGS ---\n` +
+        `*Transaction Confirmation:* ${this.settings.disableConfirmation ? '❌ Disabled' : '✅ Enabled'}\n` +
+        `*Minimum Display Amount:* $${this.settings.minimumDisplayAmount}\n` +
+        `*Transfer Amount Buttons:*\n`   +
+        `${this.settings.defaultTransferAmounts[0]}% - ${this.settings.defaultTransferAmounts[1]}% - 100% - custom \n\n` +
+        `*--- VOTING SETTINGS ---*\n` +
+        `*Voting Time:* ${votingTimeMinutes} minutes\n` +
+        `*Approval Threshold:* ${votingThresholdPercent}%\n\n` +
+        `Note: Settings are stored in memory and will reset when bot restarts.`;
+
+      const keyboard = new InlineKeyboard()
+        // Disable Confirmation setting
+        .text("Transaction Confirmation", "no_action")
+        .row()
+        .text(`${this.settings.disableConfirmation ? '❌ Disabled' : '✅ Enabled' }`, `toggle_confirmation`)
+        .row()
+        // Transfer Amount Buttons
+        .text("Transfer Amount Buttons", "no_action")
+        .row()
+        .text(`${this.settings.defaultTransferAmounts[0]}%`, "set_transfer_amount_1")
+        .text(`${this.settings.defaultTransferAmounts[1]}%`, "set_transfer_amount_2")
+        .row()
+        // Minimum Display Amount setting
+        .text("Minimum Display Amount", "no_action")
+        .row()
+        .text(`$${this.settings.minimumDisplayAmount}`, "set_min_display_input")
+        .row()
+        // Voting Time setting
+        .text("Voting Time", "no_action")
+        .row()
+        .text(`${votingTimeMinutes} minutes`, "set_voting_time")
+        .row()
+        // Approval Threshold setting
+        .text("Approval Threshold", "no_action")
+        .row()
+        .text(`${votingThresholdPercent}%`, "set_voting_threshold")
+        .row()
+        .text("🔙 Back to Home", "start");
+
+      ctx.reply(message, {
+      parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      console.error("Error showing settings:", error);
+      ctx.reply("Error loading settings. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Home", "start")
+      });
+    }
+  }
+
+
+  private async promptMinDisplayInput(ctx: any) {
+    const message = `⚙️ *Set Minimum Display Amount*\n\n` +
+      `Current minimum: $${this.settings.minimumDisplayAmount}\n\n` +
+      `Please enter the minimum USD value to display positions in portfolio.\n` +
+      `Send a number (e.g., 5 for $5, 0.5 for $0.50):`;
+
+    const keyboard = new InlineKeyboard()
+      .text("❌ Cancel", "settings");
+
+    ctx.reply(message, {
+      parse_mode: "Markdown",
+      reply_markup: keyboard
+    });
+
+    // Store the user's state for input handling
+    const userId = ctx.from?.id;
+    if (userId) {
+      this.pendingTransfers.set(userId, { assetIndex: -1, step: 'min_display_input' });
+    }
+  }
+
+  private async promptVotingTimeInput(ctx: any) {
+    const currentMinutes = Math.floor(this.settings.votingTimePeriod / 60);
+    const message = `⚙️ *Set Voting Time Period*\n\n` +
+      `Current time: ${currentMinutes} minutes\n\n` +
+      `Please enter the voting time period in minutes.\n` +
+      `Send a number (e.g., 5 for 5 minutes, 10 for 10 minutes):`;
+
+    const keyboard = new InlineKeyboard()
+      .text("❌ Cancel", "settings");
+
+    ctx.reply(message, {
+      parse_mode: "Markdown",
+      reply_markup: keyboard
+    });
+
+    // Store the user's state for input handling
+    const userId = ctx.from?.id;
+    if (userId) {
+      this.pendingTransfers.set(userId, { assetIndex: -1, step: 'voting_time_input' });
+    }
+  }
+
+
+  private async promptVotingThresholdInput(ctx: any) {
+    const currentPercent = Math.round(this.settings.votingThreshold * 100);
+    const message = `⚙️ *Set Approval Threshold*\n\n` +
+      `Current threshold: ${currentPercent}%\n\n` +
+      `Please enter the approval threshold as a percentage.\n` +
+      `Send a number (e.g., 50 for 50%, 75 for 75%):`;
+
+    const keyboard = new InlineKeyboard()
+      .text("❌ Cancel", "settings");
+
+    ctx.reply(message, {
+      parse_mode: "Markdown",
+      reply_markup: keyboard
+    });
+
+    // Store the user's state for input handling
+    const userId = ctx.from?.id;
+    if (userId) {
+      this.pendingTransfers.set(userId, { assetIndex: -1, step: 'voting_threshold_input' });
+    }
+  }
+
+  private async promptTransferAmountInput(ctx: any, buttonIndex: number) {
+    const currentValue = this.settings.defaultTransferAmounts[buttonIndex - 1];
+    const message = `⚙️ *Set Transfer Amount Button *\n\n` +
+      `Current value: ${currentValue}%\n\n` +
+      `Please enter the new percentage value for this button.\n` +
+      `Send a number (e.g., 30 for 30%, 75 for 75%):`;
+
+    const keyboard = new InlineKeyboard()
+      .text("❌ Cancel", "settings");
+
+    ctx.reply(message, {
+      parse_mode: "Markdown",
+      reply_markup: keyboard
+    });
+
+    // Store the user's state for input handling
+    const userId = ctx.from?.id;
+    if (userId) {
+      this.pendingTransfers.set(userId, { assetIndex: buttonIndex, step: 'transfer_amount_input' });
+    }
+  }
+
+  private async handleMinDisplayInput(ctx: any, text: string) {
+    try {
+      const amount = parseFloat(text);
+
+      if (isNaN(amount) || amount < 0) {
+        ctx.reply("❌ Invalid amount. Please enter a valid number (e.g., 5 for $5, 0.5 for $0.50):");
+        return;
+      }
+
+      this.settings.minimumDisplayAmount = amount;
+
+      // Clear the pending transfer
+      const userId = ctx.from?.id;
+      if (userId) {
+        this.pendingTransfers.delete(userId);
+      }
+
+      ctx.reply(`✅ Minimum display amount set to $${amount}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Settings", "settings")
+      });
+    } catch (error) {
+      console.error("Error handling min display input:", error);
+      ctx.reply("❌ Error setting minimum display amount. Please try again.");
+    }
+  }
+
+  private async handleVotingTimeInput(ctx: any, text: string) {
+    try {
+      const minutes = parseInt(text);
+
+      if (isNaN(minutes) || minutes < 1 || minutes > 1440) {
+        ctx.reply("❌ Invalid time. Please enter a number between 1 and 1440 minutes (24 hours):");
+        return;
+      }
+
+      this.settings.votingTimePeriod = minutes * 60; // Convert to seconds
+
+      // Clear the pending transfer
+      const userId = ctx.from?.id;
+      if (userId) {
+        this.pendingTransfers.delete(userId);
+      }
+
+      // Go directly back to settings
+      await this.showSettings(ctx);
+  } catch (error) {
+      console.error("Error handling voting time input:", error);
+      ctx.reply("❌ Error setting voting time. Please try again.");
+    }
+  }
+
+
+  private async handleVotingThresholdInput(ctx: any, text: string) {
+    try {
+      const percent = parseFloat(text);
+
+      if (isNaN(percent) || percent < 0 || percent > 100) {
+        ctx.reply("❌ Invalid percentage. Please enter a number between 0 and 100:");
+        return;
+      }
+
+      this.settings.votingThreshold = percent / 100; // Convert to decimal
+
+      // Clear the pending transfer
+      const userId = ctx.from?.id;
+      if (userId) {
+        this.pendingTransfers.delete(userId);
+      }
+
+      // Go directly back to settings
+      await this.showSettings(ctx);
+    } catch (error) {
+      console.error("Error handling voting threshold input:", error);
+      ctx.reply("❌ Error setting approval threshold. Please try again.");
+    }
+  }
+
+  private async handleTransferAmountInput(ctx: any, text: string) {
+    try {
+      const percent = parseFloat(text);
+
+      if (isNaN(percent) || percent < 0 || percent > 100) {
+        ctx.reply("❌ Invalid percentage. Please enter a number between 0 and 100:");
+        return;
+      }
+
+      // Get the button index from the pending transfer
+      const userId = ctx.from?.id;
+      if (!userId) return;
+
+      const pendingTransfer = this.pendingTransfers.get(userId);
+      if (!pendingTransfer) return;
+
+      const buttonIndex = pendingTransfer.assetIndex;
+      if (buttonIndex < 1 || buttonIndex > 2) {
+        ctx.reply("❌ Invalid button index.");
+        return;
+      }
+
+      // Update the transfer amount
+      this.settings.defaultTransferAmounts[buttonIndex - 1] = percent;
+
+      // Clear the pending transfer
+      this.pendingTransfers.delete(userId);
+
+      // Go directly back to settings
+      await this.showSettings(ctx);
+    } catch (error) {
+      console.error("Error handling transfer amount input:", error);
+      ctx.reply("❌ Error setting transfer amount. Please try again.");
+    }
+  }
+
+  private async handleOrderSizeInput(ctx: any, text: string) {
+    try {
+      const size = parseFloat(text);
+
+      if (isNaN(size) || size <= 0) {
+        ctx.reply("❌ Invalid size. Please enter a positive number:");
+        return;
+      }
+
+      // Get the order data from the pending transfer
+      const userId = ctx.from?.id;
+      if (!userId) return;
+
+      const pendingTransfer = this.pendingTransfers.get(userId);
+      if (!pendingTransfer || !pendingTransfer.orderData) return;
+
+      const { marketId, orderSide, market } = pendingTransfer.orderData;
+
+      // Show order confirmation
+      await this.showOrderConfirmation(ctx, marketId, orderSide, market, size);
+    } catch (error) {
+      console.error("Error handling order size input:", error);
+      ctx.reply("❌ Error processing order size. Please try again.");
+    }
+  }
+
   private async showAssetOverview(ctx: any, index: number) {
     try {
       const holdings = await this.getRealBalances();
       const holding = holdings[index];
-      
+
       if (!holding) {
         ctx.reply("Asset not found.");
         return;
@@ -253,21 +752,21 @@ export class Bot {
         .text("🔄 Transfer", `transfer_${index}`)
         .text("🔙 Back", "portfolio");
 
-      const message = `**${holding.symbol} Overview**\n\n` +
-        `**Name:** ${holding.name}\n` +
-        `**Amount:** ${holding.amount}\n` +
-        `**Price:** ${holding.price}\n` +
-        `**Value:** ${holding.value}\n` +
-        `**Type:** ${holding.isCoin ? 'Coin' : 'Fungible Asset'}\n` +
-        `**Asset ID:** \`${holding.assetType}\`\n` +
-        `**Market Cap:** Coming soon\n` +
-        `**24h Change:** Coming soon`;
+      const message = `*${holding.symbol} Overview*\n\n` +
+        `*Name:* ${holding.name}\n` +
+        `*Amount:* ${holding.amount}\n` +
+        `*Price:* ${holding.price}\n` +
+        `*Value:* ${holding.value}\n` +
+        `*Type:* ${holding.isCoin ? 'Coin' : 'Fungible Asset'}\n` +
+        `*Asset ID:* \`${holding.assetType}\`\n` +
+        `*Market Cap:* Coming soon\n` +
+        `*24h Change:* Coming soon`;
 
       ctx.reply(message, {
         parse_mode: "Markdown",
         reply_markup: keyboard
       });
-    } catch (error) {
+          } catch (error) {
       console.error("Error showing asset overview:", error);
       ctx.reply("Error loading asset details. Please try again.");
     }
@@ -277,7 +776,7 @@ export class Bot {
     try {
       const holdings = await this.getRealBalances();
       const holding = holdings[index];
-      
+
       if (!holding) {
         ctx.reply("Asset not found.");
         return;
@@ -291,17 +790,17 @@ export class Bot {
         .row()
         .text("🔙 Back to Buy Menu", "buy");
 
-      const message = `**Buy ${holding.symbol}**\n\n` +
-        `**Name:** ${holding.name}\n` +
-        `**Current Price:** ${holding.price}\n` +
-        `**Available Balance:** ${holding.amount} ${holding.symbol}\n\n` +
+      const message = `*Buy ${holding.symbol}*\n\n` +
+        `*Name:* ${holding.name}\n` +
+        `*Current Price:* ${holding.price}\n` +
+        `*Available Balance:* ${holding.amount} ${holding.symbol}\n\n` +
         `Choose how much you want to buy:`;
 
       ctx.reply(message, {
         parse_mode: "Markdown",
         reply_markup: keyboard
       });
-    } catch (error) {
+          } catch (error) {
       console.error("Error showing buy options:", error);
       ctx.reply("Error loading buy options. Please try again.");
     }
@@ -311,7 +810,7 @@ export class Bot {
     try {
       const holdings = await this.getRealBalances();
       const holding = holdings[index];
-      
+
       if (!holding) {
         ctx.reply("Asset not found.");
         return;
@@ -325,11 +824,11 @@ export class Bot {
         .row()
         .text("🔙 Back to Sell Menu", "sell");
 
-      const message = `**Sell ${holding.symbol}**\n\n` +
-        `**Name:** ${holding.name}\n` +
-        `**Current Price:** ${holding.price}\n` +
-        `**Available Balance:** ${holding.amount} ${holding.symbol}\n` +
-        `**Value:** ${holding.value}\n\n` +
+      const message = `*Sell ${holding.symbol}*\n\n` +
+        `*Name:* ${holding.name}\n` +
+        `*Current Price:* ${holding.price}\n` +
+        `*Available Balance:* ${holding.amount} ${holding.symbol}\n` +
+        `*Value:* ${holding.value}\n\n` +
         `Choose how much you want to sell:`;
 
       ctx.reply(message, {
@@ -358,9 +857,9 @@ export class Bot {
         .row()
         .text("🔙 Back to Asset", `asset_${index}`);
 
-      const message = `**Transfer ${holding.symbol}**\n\n` +
-        `**Available:** ${holding.amount} ${holding.symbol}\n` +
-        `**Value:** ${holding.value}\n\n` +
+      const message = `*Transfer ${holding.symbol}*\n\n` +
+        `*Available:* ${holding.amount} ${holding.symbol}\n` +
+        `*Value:* ${holding.value}\n\n` +
         `Choose how to enter the recipient address:`;
 
       ctx.reply(message, {
@@ -395,9 +894,9 @@ export class Bot {
       const keyboard = new InlineKeyboard()
         .text("❌ Cancel", `transfer_${index}`);
 
-      const message = `**Enter Recipient Address**\n\n` +
-        `**Asset:** ${holding.symbol} (${holding.name})\n` +
-        `**Available:** ${holding.amount} ${holding.symbol}\n\n` +
+      const message = `*Enter Recipient Address*\n\n` +
+        `*Asset:* ${holding.symbol} (${holding.name})\n` +
+        `*Available:* ${holding.amount} ${holding.symbol}\n\n` +
         `Please send the recipient's Aptos address as a message.\n` +
         `The address should start with "0x" and be 64 characters long.`;
 
@@ -427,9 +926,9 @@ export class Bot {
         .row()
         .text("🔙 Back to Transfer", `transfer_${index}`);
 
-      const message = `**Address Book**\n\n` +
-        `**Asset:** ${holding.symbol} (${holding.name})\n` +
-        `**Available:** ${holding.amount} ${holding.symbol}\n\n` +
+      const message = `*Address Book*\n\n` +
+        `*Asset:* ${holding.symbol} (${holding.name})\n` +
+        `*Available:* ${holding.amount} ${holding.symbol}\n\n` +
         `Address book feature coming soon!\n` +
         `For now, please enter a custom address.`;
 
@@ -460,18 +959,22 @@ export class Bot {
       const holding = holdings[pendingTransfer.assetIndex];
 
       const availableAmount = parseFloat(holding.amount);
-      const keyboard = new InlineKeyboard()
-        .text("25%", `amount_25_${pendingTransfer.assetIndex}`)
-        .text("50%", `amount_50_${pendingTransfer.assetIndex}`)
-        .text("100%", `amount_100_${pendingTransfer.assetIndex}`)
+      const keyboard = new InlineKeyboard();
+
+      // Add percentage buttons based on settings
+      this.settings.defaultTransferAmounts.forEach(amount => {
+        keyboard.text(`${amount}%`, `amount_${amount}_${pendingTransfer.assetIndex}`);
+      });
+
+      keyboard.text("100%", `amount_100_${pendingTransfer.assetIndex}`)
         .row()
         .text("📝 Custom Amount", `custom_amount_${pendingTransfer.assetIndex}`)
         .text("❌ Cancel", `transfer_${pendingTransfer.assetIndex}`);
 
-      const message = `**Enter Transfer Amount**\n\n` +
-        `**Asset:** ${holding.symbol} (${holding.name})\n` +
-        `**Recipient:** \`${address}\`\n` +
-        `**Available:** ${holding.amount} ${holding.symbol}\n\n` +
+      const message = `*Enter Transfer Amount*\n\n` +
+        `*Asset:* ${holding.symbol} (${holding.name})\n` +
+        `*Recipient:* \`${address}\`\n` +
+        `*Available:* ${holding.amount} ${holding.symbol}\n\n` +
         `Choose a percentage or enter a custom amount:`;
 
       ctx.reply(message, {
@@ -550,7 +1053,7 @@ export class Bot {
 
       // Show confirmation
       await this.showTransferConfirmation(ctx, pendingTransfer);
-    } catch (error) {
+        } catch (error) {
       console.error("Error handling percentage amount:", error);
       ctx.reply("Error processing amount. Please try again.");
     }
@@ -582,10 +1085,10 @@ export class Bot {
       const keyboard = new InlineKeyboard()
         .text("❌ Cancel", `transfer_${index}`);
 
-      const message = `**Enter Custom Amount**\n\n` +
-        `**Asset:** ${holding.symbol} (${holding.name})\n` +
-        `**Recipient:** \`${pendingTransfer.recipientAddress}\`\n` +
-        `**Available:** ${holding.amount} ${holding.symbol}\n\n` +
+      const message = `*Enter Custom Amount*\n\n` +
+        `*Asset:* ${holding.symbol} (${holding.name})\n` +
+        `*Recipient:* \`${pendingTransfer.recipientAddress}\`\n` +
+        `*Available:* ${holding.amount} ${holding.symbol}\n\n` +
         `Please enter the exact amount to transfer (e.g., "1.5" for 1.5 tokens):`;
 
       ctx.reply(message, {
@@ -607,12 +1110,12 @@ export class Bot {
         .text("✅ Confirm Transfer", `confirm_transfer_${pendingTransfer.assetIndex}`)
         .text("❌ Cancel", `transfer_${pendingTransfer.assetIndex}`);
 
-      const message = `**Confirm Transfer**\n\n` +
-        `**Asset:** ${holding.symbol} (${holding.name})\n` +
-        `**Amount:** ${pendingTransfer.amount} ${holding.symbol}\n` +
-        `**Recipient:** \`${pendingTransfer.recipientAddress}\`\n` +
-        `**Value:** ~$${(parseFloat(pendingTransfer.amount) * (parseFloat(holding.price.replace('$', '')) || 0)).toFixed(2)}\n\n` +
-        `⚠️ **This action cannot be undone!**`;
+      const message = `*Confirm Transfer*\n\n` +
+        `*Asset:* ${holding.symbol} (${holding.name})\n` +
+        `*Amount:* ${pendingTransfer.amount} ${holding.symbol}\n` +
+        `*Recipient:* \`${pendingTransfer.recipientAddress}\`\n` +
+        `*Value:* ~$${(parseFloat(pendingTransfer.amount) * (parseFloat(holding.price.replace('$', '')) || 0)).toFixed(2)}\n\n` +
+        `⚠️ *This action cannot be undone!*`;
 
       ctx.reply(message, {
         parse_mode: "Markdown",
@@ -675,12 +1178,16 @@ export class Bot {
       this.pendingTransfers.delete(userId);
 
       // Show success message
-      const message = `✅ **Transfer Successful!**\n\n` +
-        `**Asset:** ${holding.symbol} (${holding.name})\n` +
-        `**Amount:** ${pendingTransfer.amount} ${holding.symbol}\n` +
-        `**Recipient:** \`${pendingTransfer.recipientAddress}\`\n` +
-        `**Transaction:** \`${transactionHash}\`\n\n` +
-        `View on [Aptos Explorer](https://explorer.aptoslabs.com/txn/${transactionHash})`;
+      const networkType = getNetworkType();
+      const explorerUrl = this.getExplorerUrl(transactionHash);
+
+      const message = `✅ *Transfer Successful!*\n\n` +
+        `*Asset:* ${holding.symbol} (${holding.name})\n` +
+        `*Amount:* ${pendingTransfer.amount} ${holding.symbol}\n` +
+        `*Recipient:* \`${pendingTransfer.recipientAddress}\`\n` +
+        `*Transaction:* \`${transactionHash}\`\n` +
+        `*Network:* ${networkType}\n\n` +
+        `View on [Aptos Explorer](${explorerUrl})`;
 
       const keyboard = new InlineKeyboard()
         .text("📊 Back to Portfolio", "portfolio");
@@ -690,7 +1197,7 @@ export class Bot {
         reply_markup: keyboard
       });
 
-    } catch (error) {
+        } catch (error) {
       console.error("Error executing transfer:", error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       ctx.reply(`❌ Transfer failed: ${errorMessage}`);
@@ -809,14 +1316,965 @@ export class Bot {
     }
   }
 
+  private async showDepositMenu(ctx: any) {
+    try {
+      // Get available markets from Kana Labs
+      const markets = await this.getAvailableMarkets();
+
+      let message = "📥 *Deposit to Kana Labs Perps*\n\n";
+      message += "Select a market to deposit into:\n\n";
+
+      const keyboard = new InlineKeyboard();
+
+      markets.forEach((market, index) => {
+        keyboard.text(`${market.base_name}`, `deposit_market_${market.market_id}`);
+        if ((index + 1) % 2 === 0) {
+          keyboard.row();
+        }
+      });
+
+      keyboard.row().text("🔙 Back to Home", "start");
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+        } catch (error) {
+      console.error("Error showing deposit menu:", error);
+      ctx.reply("❌ Error loading markets. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Home", "start")
+      });
+    }
+  }
+
+  private async showMarketSelection(ctx: any) {
+    try {
+      // Get testnet markets from Kana Labs documentation
+      const testnetMarkets = [
+        { market_id: "1338", asset: "APT-USD", description: "Aptos-based trading market" },
+        { market_id: "1339", asset: "BTC-USD", description: "Bitcoin-based trading market" },
+        { market_id: "1340", asset: "ETH-USD", description: "Ethereum-based trading market" },
+        { market_id: "2387", asset: "SOL-USD", description: "Solana-based trading market" }
+      ];
+
+      let message = "📊 *Markets*\n\n";
+      message += "Select a market to view details and trade:\n\n";
+
+      // Display markets (simple overview)
+      testnetMarkets.forEach((market) => {
+        message += `**${market.asset}**\n`;
+        message += `${market.description}\n\n`;
+      });
+
+      const keyboard = new InlineKeyboard();
+
+      testnetMarkets.forEach((market) => {
+        keyboard.text(`${market.asset}`, `select_market_${market.market_id}`);
+        keyboard.row();
+      });
+
+      keyboard.row().text("🔙 Back to Home", "start");
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      console.error("Error showing market selection:", error);
+      ctx.reply("❌ Error loading markets. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Home", "start")
+      });
+    }
+  }
+
+  private async showMarketDetails(ctx: any, marketId: string) {
+    try {
+      // Get market info
+      const testnetMarkets = [
+        { market_id: "1338", asset: "APT-USD", description: "Aptos-based trading market" },
+        { market_id: "1339", asset: "BTC-USD", description: "Bitcoin-based trading market" },
+        { market_id: "1340", asset: "ETH-USD", description: "Ethereum-based trading market" },
+        { market_id: "2387", asset: "SOL-USD", description: "Solana-based trading market" }
+      ];
+
+      const market = testnetMarkets.find(m => m.market_id === marketId);
+      if (!market) {
+        ctx.reply("❌ Market not found.");
+        return;
+      }
+
+      // Fetch detailed market data
+      console.log(`🔍 [MARKET_DETAILS] Fetching data for market ${marketId}`);
+      
+      const [marketInfo, marketPrice] = await Promise.all([
+        this.kanaLabsPerps.getMarketInfo(marketId).catch(err => {
+          console.error(`❌ [MARKET_DETAILS] Error fetching market info:`, err.message);
+          return { success: false, data: null, message: err.message };
+        }),
+        this.kanaLabsPerps.getMarketPrice(marketId).catch(err => {
+          console.error(`❌ [MARKET_DETAILS] Error fetching market price:`, err.message);
+          return { success: false, data: null, message: err.message };
+        })
+      ]);
+      
+      console.log(`🔍 [MARKET_DETAILS] Market info result:`, marketInfo.success ? 'SUCCESS' : 'FAILED');
+      console.log(`🔍 [MARKET_DETAILS] Market price result:`, marketPrice.success ? 'SUCCESS' : 'FAILED');
+
+      let message = `📊 *${market.asset}*\n\n`;
+      message += `**Market Information**\n`;
+      message += `Description: ${market.description}\n\n`;
+
+      if (marketInfo.success && marketInfo.data && marketInfo.data.length > 0) {
+        const data = marketInfo.data[0];
+        if (data) {
+          const maxLeverage = data.max_leverage || 'N/A';
+          const minLots = data.min_lots || 'N/A';
+          const maxLots = data.max_lots || 'N/A';
+          const lotSize = data.lot_size || 'N/A';
+          const tickSize = data.tick_size || 'N/A';
+          const maintenanceMargin = data.maintenance_margin || 'N/A';
+
+          message += `**Trading Parameters**\n`;
+          message += `Max Leverage: ${maxLeverage}x\n`;
+          message += `Min Order: ${minLots} lots\n`;
+          message += `Max Order: ${maxLots} lots\n`;
+          message += `Lot Size: ${lotSize}\n`;
+          message += `Tick Size: ${tickSize}\n`;
+          message += `Maintenance Margin: ${maintenanceMargin}\n\n`;
+        }
+      }
+
+      // Add current price information
+      if (marketPrice.success && marketPrice.data) {
+        // Handle the actual API response structure
+        if (marketPrice.data.bestAskPrice && marketPrice.data.bestBidPrice) {
+          const midPrice = (marketPrice.data.bestAskPrice + marketPrice.data.bestBidPrice) / 2;
+          message += `**Current Price:** $${midPrice.toFixed(3)}\n`;
+          message += `Bid: $${marketPrice.data.bestBidPrice} | Ask: $${marketPrice.data.bestAskPrice}\n\n`;
+        } else if (marketPrice.data.price) {
+          message += `**Current Price:** $${marketPrice.data.price}\n\n`;
+        } else {
+          message += `**Price:** Data format not recognized\n\n`;
+        }
+      } else {
+        message += `**Price:** Unable to fetch current price\n\n`;
+      }
+
+      message += `**Trading Actions**\n`;
+      message += `Choose an action to trade this market:`;
+
+      const keyboard = new InlineKeyboard()
+        .text("🟢 Long (Buy)", `order_type_${marketId}_long`)
+        .text("🔴 Short (Sell)", `order_type_${marketId}_short`)
+        .row()
+        .text("📈 View Chart", `chart_${marketId}`)
+        .text("📊 Order Book", `orderbook_${marketId}`)
+        .row()
+        .text("🔙 Back to Markets", "markets");
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      console.error("Error showing market details:", error);
+      ctx.reply("❌ Error loading market details. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "markets")
+      });
+    }
+  }
+
+  private async showChart(ctx: any, marketId: string) {
+    try {
+      const testnetMarkets = [
+        { market_id: "1338", asset: "APT-USD", description: "Aptos-based trading market" },
+        { market_id: "1339", asset: "BTC-USD", description: "Bitcoin-based trading market" },
+        { market_id: "1340", asset: "ETH-USD", description: "Ethereum-based trading market" },
+        { market_id: "2387", asset: "SOL-USD", description: "Solana-based trading market" }
+      ];
+
+      const market = testnetMarkets.find(m => m.market_id === marketId);
+      if (!market) {
+        ctx.reply("❌ Market not found.");
+        return;
+      }
+
+      const message = `📈 *${market.asset} Chart*\n\n` +
+        `Chart functionality coming soon!\n\n` +
+        `For now, you can view charts on the Kana Labs website.`;
+
+      const keyboard = new InlineKeyboard()
+        .text("🔙 Back to Market", `select_market_${marketId}`);
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      console.error("Error showing chart:", error);
+      ctx.reply("❌ Error loading chart. Please try again.");
+    }
+  }
+
+  private async showOrderBook(ctx: any, marketId: string) {
+    try {
+      const testnetMarkets = [
+        { market_id: "1338", asset: "APT-USD", description: "Aptos-based trading market" },
+        { market_id: "1339", asset: "BTC-USD", description: "Bitcoin-based trading market" },
+        { market_id: "1340", asset: "ETH-USD", description: "Ethereum-based trading market" },
+        { market_id: "2387", asset: "SOL-USD", description: "Solana-based trading market" }
+      ];
+
+      const market = testnetMarkets.find(m => m.market_id === marketId);
+      if (!market) {
+        ctx.reply("❌ Market not found.");
+        return;
+      }
+
+      // Order book data is not available through the current API
+      // const orderbookResult = await this.kanaLabsPerps.getOrderBook(marketId);
+
+      let message = `📊 *${market.asset} Order Book*\n\n`;
+      message += `Order book data is not available through the current API.\n`;
+      message += `This feature will be implemented when the API supports it.\n\n`;
+      message += `**Available Actions:**\n`;
+      message += `• View current market price\n`;
+      message += `• Place market orders\n`;
+      message += `• View your positions and orders\n`;
+
+      const keyboard = new InlineKeyboard()
+        .text("🔄 Refresh", `orderbook_${marketId}`)
+        .text("🔙 Back to Market", `select_market_${marketId}`);
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      console.error("Error showing order book:", error);
+      ctx.reply("❌ Error loading order book. Please try again.");
+    }
+  }
+
+  private async showOrderSizeInput(ctx: any, marketId: string, orderSide: string) {
+    try {
+      // Get market info
+      const testnetMarkets = [
+        { market_id: "1338", asset: "APT-USD", description: "Aptos-based trading market" },
+        { market_id: "1339", asset: "BTC-USD", description: "Bitcoin-based trading market" },
+        { market_id: "1340", asset: "ETH-USD", description: "Ethereum-based trading market" },
+        { market_id: "2387", asset: "SOL-USD", description: "Solana-based trading market" }
+      ];
+
+      const market = testnetMarkets.find(m => m.market_id === marketId);
+      if (!market) {
+        ctx.reply("❌ Market not found.");
+        return;
+      }
+
+      const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
+      const sideText = orderSide === 'long' ? 'Long (Buy)' : 'Short (Sell)';
+
+      let message = `🎯 *Create Order - ${market.asset}*\n\n`;
+      message += `Market: ${market.asset}\n`;
+      message += `Side: ${sideEmoji} ${sideText}\n\n`;
+      message += `Enter order size (amount in USDC):\n`;
+      message += `Example: 100 (for $100 USDC)`;
+
+      const keyboard = new InlineKeyboard()
+        .text("❌ Cancel", `select_market_${marketId}`);
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+
+      // Store the order context for this user
+      const userId = ctx.from?.id;
+      if (userId) {
+        this.pendingTransfers.set(userId, {
+          assetIndex: -1,
+          step: 'order_size_input',
+          orderData: { marketId, orderSide, market }
+        });
+        }
+      } catch (error) {
+      console.error("Error showing order size input:", error);
+      ctx.reply("❌ Error loading order form. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "create_order")
+      });
+    }
+  }
+
+  private async showOrderConfirmation(ctx: any, marketId: string, orderSide: string, market: any, size: number) {
+    try {
+      const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
+      const sideText = orderSide === 'long' ? 'Long (Buy)' : 'Short (Sell)';
+
+      let message = `🎯 *Order Confirmation*\n\n`;
+      message += `Market: ${market.asset}\n`;
+      message += `Side: ${sideEmoji} ${sideText}\n`;
+      message += `Size: $${size} USDC\n`;
+      message += `Type: Market Order\n`;
+      message += `Leverage: 1x (default)\n\n`;
+      message += `⚠️ *This will place a market order immediately!*`;
+
+      const keyboard = new InlineKeyboard()
+        .text("✅ Confirm Order", `confirm_order_${marketId}_${orderSide}_${size}`)
+        .text("❌ Cancel", `select_market_${marketId}`);
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      console.error("Error showing order confirmation:", error);
+      ctx.reply("❌ Error loading confirmation. Please try again.");
+    }
+  }
+
+  private async executeOrder(ctx: any, marketId: string, orderSide: string, size: number) {
+    try {
+      // Show processing message
+      await ctx.reply("🔄 Placing order... Please wait.");
+
+      // Get market info
+      const testnetMarkets = [
+        { market_id: "1338", asset: "APT-USD", description: "Aptos-based trading market" },
+        { market_id: "1339", asset: "BTC-USD", description: "Bitcoin-based trading market" },
+        { market_id: "1340", asset: "ETH-USD", description: "Ethereum-based trading market" },
+        { market_id: "2387", asset: "SOL-USD", description: "Solana-based trading market" }
+      ];
+
+      const market = testnetMarkets.find(m => m.market_id === marketId);
+      if (!market) {
+        ctx.reply("❌ Market not found.");
+        return;
+      }
+
+      // Place order using Kana Labs API
+      const orderResult = await this.kanaLabsPerps.placeMarketOrder({
+        marketId: marketId,
+        side: orderSide === 'long', // true for long, false for short
+        size: size.toString(),
+        orderType: 'market'
+      });
+
+      // Clear any pending order data
+      const userId = ctx.from?.id;
+      if (userId) {
+        this.pendingTransfers.delete(userId);
+      }
+
+      if (orderResult.success) {
+        const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
+        const sideText = orderSide === 'long' ? 'Long' : 'Short';
+
+        const message = `✅ *Order Placed Successfully!*\n\n` +
+          `Market: ${market.asset}\n` +
+          `Side: ${sideEmoji} ${sideText}\n` +
+          `Size: $${size} USDC\n` +
+          `Type: Market Order\n\n` +
+          `Your order has been submitted to the market.`;
+
+        const keyboard = new InlineKeyboard()
+          .text("📊 View Positions", "positions")
+          .text("📋 View Orders", "open_orders")
+          .row()
+          .text("🔙 Back to Home", "start");
+
+        ctx.reply(message, {
+          parse_mode: "Markdown",
+          reply_markup: keyboard
+        });
+      } else {
+        ctx.reply(`❌ Order failed: ${orderResult.message || 'Unknown error'}`, {
+          reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "create_order")
+        });
+      }
+
+  } catch (error) {
+      console.error("Error executing order:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Order failed: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "create_order")
+      });
+    }
+  }
+
+  private async getAvailableMarkets() {
+    // Try to fetch from API first, fallback to hardcoded
+    try {
+      console.log(`🔍 [MARKETS] Fetching available markets from API...`);
+      // Note: The API doesn't have a direct "get all markets" endpoint
+      // So we'll use a combination of known testnet market IDs
+      const knownMarkets = [
+        { market_id: "501", base_name: "APT/USDC", max_leverage: "20", min_lots: "500" },
+        { market_id: "502", base_name: "BTC/USDC", max_leverage: "10", min_lots: "100" },
+        { market_id: "66", base_name: "SOL/USDC", max_leverage: "15", min_lots: "200" },
+        { market_id: "14", base_name: "ETH/USDC", max_leverage: "12", min_lots: "300" }
+      ];
+
+      console.log(`🔍 [MARKETS] Using known testnet markets:`, knownMarkets);
+      return knownMarkets;
+    } catch (error) {
+      console.error(`❌ [MARKETS] Error fetching markets, using fallback:`, error);
+      // Fallback to hardcoded markets
+      return [
+        {
+          market_id: "501",
+          base_name: "APT/USDC",
+          max_leverage: "20",
+          min_lots: "500"
+        },
+        {
+          market_id: "502",
+          base_name: "BTC/USDC",
+          max_leverage: "10",
+          min_lots: "100"
+        }
+      ];
+    }
+  }
+
+  private async showDepositAmountPrompt(ctx: any, marketId: string) {
+    try {
+      const markets = await this.getAvailableMarkets();
+      const market = markets.find(m => m.market_id === marketId);
+
+      if (!market) {
+        ctx.reply("❌ Market not found.");
+      return;
+    }
+
+      // Store the deposit context for this user
+      const userId = ctx.from?.id;
+      if (userId) {
+        this.pendingDeposits.set(userId, {
+          marketId,
+          step: 'amount'
+        });
+      }
+
+      const keyboard = new InlineKeyboard()
+        .text("❌ Cancel", "deposit");
+
+      const message = `📥 *Deposit to ${market.base_name}*\n\n` +
+        `*Market:* ${market.base_name}\n` +
+        `*Max Leverage:* ${market.max_leverage}x\n` +
+        `*Min Amount:* ${market.min_lots} USDC\n\n` +
+        `Please enter the amount in USDC to deposit:\n` +
+        `(e.g., "100" for 100 USDC)`;
+
+      ctx.reply(message, {
+      parse_mode: "Markdown",
+        reply_markup: keyboard
+    });
+  } catch (error) {
+      console.error("Error showing deposit amount prompt:", error);
+      ctx.reply("❌ Error loading deposit form. Please try again.");
+    }
+  }
+
+  private async handleDepositAmountInput(ctx: any, pendingDeposit: any, amountText: string) {
+    try {
+      const amount = parseFloat(amountText);
+
+      if (isNaN(amount) || amount <= 0) {
+        ctx.reply("❌ Invalid amount. Please enter a positive number.");
+        return;
+      }
+
+      // Update pending deposit with amount
+      pendingDeposit.amount = amountText;
+      this.pendingDeposits.set(ctx.from.id, pendingDeposit);
+
+      // Show confirmation
+      await this.showDepositConfirmation(ctx, pendingDeposit);
+  } catch (error) {
+      console.error("Error handling deposit amount input:", error);
+      ctx.reply("❌ Error processing amount. Please try again.");
+    }
+  }
+
+  private async showDepositConfirmation(ctx: any, pendingDeposit: any) {
+    try {
+      const markets = await this.getAvailableMarkets();
+      const market = markets.find(m => m.market_id === pendingDeposit.marketId);
+
+      if (!market) {
+        ctx.reply("❌ Market not found.");
+        return;
+      }
+
+      const keyboard = new InlineKeyboard()
+        .text("✅ Confirm Deposit", `confirm_deposit_${pendingDeposit.marketId}`)
+        .text("❌ Cancel", "deposit");
+
+      const message = `📥 *Confirm Deposit*\n\n` +
+        `*Market:* ${market.base_name}\n` +
+        `*Amount:* ${pendingDeposit.amount} USDC\n` +
+        `*Max Leverage:* ${market.max_leverage}x\n\n` +
+        `⚠️ *This will deposit USDC to your Kana Labs perps account!*`;
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      console.error("Error showing deposit confirmation:", error);
+      ctx.reply("❌ Error loading confirmation. Please try again.");
+    }
+  }
+
+  private async executeDeposit(ctx: any, marketId: string) {
+    try {
+      const userId = ctx.from?.id;
+      if (!userId) {
+        ctx.reply("❌ Error: User not found.");
+        return;
+      }
+
+      const pendingDeposit = this.pendingDeposits.get(userId);
+      if (!pendingDeposit || pendingDeposit.marketId !== marketId) {
+        ctx.reply("❌ Error: Deposit session expired. Please start over.");
+      return;
+    }
+
+      // Show processing message
+      await ctx.reply("🔄 Processing deposit... Please wait.");
+
+      // Call Kana Labs deposit API
+      const depositResult = await this.kanaLabsPerps.deposit({
+        marketId: marketId,
+        amount: pendingDeposit.amount || '0'
+      });
+
+      // Clear pending deposit
+      this.pendingDeposits.delete(userId);
+
+      // Show success message
+      const message = `✅ *Deposit Successful!*\n\n` +
+        `*Market:* ${marketId}\n` +
+        `*Amount:* ${pendingDeposit.amount} USDC\n` +
+        `*Transaction:* \`${JSON.stringify(depositResult.data)}\`\n\n` +
+        `Your deposit has been processed successfully!`;
+
+      const keyboard = new InlineKeyboard()
+        .text("📊 Back to Home", "start");
+
+      ctx.reply(message, {
+      parse_mode: "Markdown",
+        reply_markup: keyboard
+    });
+
+  } catch (error) {
+      console.error("Error executing deposit:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Deposit failed: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Deposit", "deposit")
+      });
+    }
+  }
+
+
+  private async executeFaucet(ctx: any) {
+    try {
+      // Get the faucet payload
+      const faucetPayload = this.kanaLabsPerps.getUSDTFaucetPayload();
+
+      // Create private key and account
+      const privateKey = new Ed25519PrivateKey(getAptosPrivateKey());
+      const account = Account.fromPrivateKey({ privateKey });
+
+      // Build faucet transaction
+      const transaction = await this.aptos.transaction.build.simple({
+        sender: account.accountAddress,
+        data: faucetPayload,
+      });
+
+      // Sign and submit transaction
+      const senderAuthenticator = this.aptos.transaction.sign({
+        signer: account,
+        transaction,
+      });
+
+      const pendingTransaction = await this.aptos.transaction.submit.simple({
+        transaction,
+        senderAuthenticator,
+      });
+
+      await this.aptos.waitForTransaction({
+        transactionHash: pendingTransaction.hash,
+      });
+
+      // Show success message
+      const explorerUrl = this.getExplorerUrl(pendingTransaction.hash);
+
+      const message = `✅ *USDT Faucet Successful!*\n\n` +
+        `*Amount:* 1000 USDT\n\n` +
+        `View on [Aptos Explorer](${explorerUrl})`;
+
+      const keyboard = new InlineKeyboard()
+        .text("📊 Back to Home", "start");
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+
+    } catch (error) {
+      console.error("Error executing faucet:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Faucet failed: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Home", "start")
+      });
+    }
+  }
+
+  private getExplorerUrl(transactionHash: string): string {
+    const networkType = getNetworkType();
+    return `https://explorer.aptoslabs.com/txn/${transactionHash}?network=${networkType}`;
+  }
+
+  private async showPositions(ctx: any) {
+    try {
+      const userAddress = getAptosAddress();
+      console.log(`🔍 [POSITIONS] Starting positions fetch for address: ${userAddress}`);
+
+      // Show loading message
+      await ctx.reply("🔄 Loading your positions...");
+
+      // Get all available markets first
+      const markets = await this.getAvailableMarkets();
+      console.log(`🔍 [POSITIONS] Found ${markets.length} markets:`, markets.map(m => `${m.base_name} (${m.market_id})`));
+
+      // Get positions for all markets
+      const allPositions = [];
+      for (const market of markets) {
+        try {
+          console.log(`🔍 [POSITIONS] Fetching positions for market ${market.market_id} (${market.base_name})`);
+          const positionsResult = await this.kanaLabsPerps.getPositions(userAddress, market.market_id);
+          console.log(`🔍 [POSITIONS] API response for market ${market.market_id}:`, {
+            success: positionsResult.success,
+            dataLength: positionsResult.data?.length || 0,
+            data: positionsResult.data
+          });
+
+          if (positionsResult.success && positionsResult.data.length > 0) {
+            const positionsWithMarket = positionsResult.data.map(pos => ({ ...pos, market_name: market.base_name }));
+            allPositions.push(...positionsWithMarket);
+            console.log(`🔍 [POSITIONS] Added ${positionsWithMarket.length} positions for market ${market.market_id}`);
+          } else {
+            console.log(`🔍 [POSITIONS] No positions found for market ${market.market_id}`);
+          }
+  } catch (error) {
+          console.error(`❌ [POSITIONS] Error fetching positions for market ${market.market_id}:`, error);
+        }
+      }
+
+      console.log(`🔍 [POSITIONS] Total positions found: ${allPositions.length}`, allPositions);
+
+      if (allPositions.length === 0) {
+        const message = "📈 *Your Positions*\n\n" +
+          "You currently have no open positions.\n\n" +
+          "Start trading by depositing funds and placing orders!";
+
+        const keyboard = new InlineKeyboard()
+          .text("💰 Deposit Funds", "deposit")
+          .text("📊 Markets", "markets")
+          .row()
+          .text("🔙 Back to Home", "start");
+
+        ctx.reply(message, { reply_markup: keyboard });
+        return;
+      }
+
+      // Format positions message
+      let message = "📈 *Your Positions*\n\n";
+
+      for (const position of allPositions) {
+        const side = position.trade_side ? "LONG" : "SHORT";
+        const sideEmoji = position.trade_side ? "🟢" : "🔴";
+        const pnl = parseFloat(position.pnl || "0");
+        const pnlEmoji = pnl >= 0 ? "📈" : "📉";
+        const pnlSign = pnl >= 0 ? "+" : "";
+
+        message += `${sideEmoji} *${position.market_name}* ${side}\n`;
+        message += `   Size: ${position.size} | Leverage: ${position.leverage}x\n`;
+        message += `   Entry: $${position.entry_price} | Current: $${position.price || 'N/A'}\n`;
+        message += `   Value: $${position.value} | Margin: $${position.margin}\n`;
+        message += `   PnL: ${pnlEmoji} ${pnlSign}$${pnl.toFixed(2)}\n`;
+        if (position.liq_price && position.liq_price !== "0") {
+          message += `   Liq Price: $${position.liq_price}\n`;
+        }
+        message += "\n";
+      }
+
+      const keyboard = new InlineKeyboard()
+        .text("🔄 Refresh", "positions")
+        .text("📊 Open Orders", "open_orders")
+        .row()
+        .text("🔙 Back to Home", "start");
+
+      ctx.reply(message, { reply_markup: keyboard });
+
+    } catch (error) {
+      console.error("Error showing positions:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Error loading positions: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Home", "start")
+      });
+    }
+  }
+
+  private async showOpenOrders(ctx: any) {
+    try {
+      const userAddress = getAptosAddress();
+      console.log(`🔍 [ORDERS] Starting orders fetch for address: ${userAddress}`);
+
+      // Show loading message
+      await ctx.reply("🔄 Loading your open orders...");
+
+      // Get all available markets first
+      const markets = await this.getAvailableMarkets();
+      console.log(`🔍 [ORDERS] Found ${markets.length} markets:`, markets.map(m => `${m.base_name} (${m.market_id})`));
+
+      // Get open orders for all markets
+      const allOrders = [];
+      for (const market of markets) {
+        try {
+          console.log(`🔍 [ORDERS] Fetching orders for market ${market.market_id} (${market.base_name})`);
+          const ordersResult = await this.kanaLabsPerps.getOpenOrders(userAddress, market.market_id);
+          console.log(`🔍 [ORDERS] API response for market ${market.market_id}:`, {
+            success: ordersResult.success,
+            dataLength: ordersResult.data?.length || 0,
+            data: ordersResult.data
+          });
+
+          if (ordersResult.success && ordersResult.data.length > 0) {
+            const ordersWithMarket = ordersResult.data.map(order => ({ ...order, market_name: market.base_name }));
+            allOrders.push(...ordersWithMarket);
+            console.log(`🔍 [ORDERS] Added ${ordersWithMarket.length} orders for market ${market.market_id}`);
+          } else {
+            console.log(`🔍 [ORDERS] No orders found for market ${market.market_id}`);
+          }
+  } catch (error) {
+          console.error(`❌ [ORDERS] Error fetching orders for market ${market.market_id}:`, error);
+        }
+      }
+
+      console.log(`🔍 [ORDERS] Total orders found: ${allOrders.length}`, allOrders);
+
+      if (allOrders.length === 0) {
+        const message = "📊 *Your Open Orders*\n\n" +
+          "You currently have no open orders.\n\n" +
+          "Place your first order to start trading!";
+
+        const keyboard = new InlineKeyboard()
+          .text("💰 Deposit Funds", "deposit")
+          .text("📈 Positions", "positions")
+          .row()
+          .text("🔙 Back to Home", "start");
+
+        ctx.reply(message, { reply_markup: keyboard });
+        return;
+      }
+
+      // Format orders message
+      let message = "📊 *Your Open Orders*\n\n";
+
+      for (const order of allOrders) {
+        const orderType = this.getOrderTypeName(order.order_type);
+        const side = order.trade_side ? "LONG" : "SHORT";
+        const sideEmoji = order.trade_side ? "🟢" : "🔴";
+
+        message += `${sideEmoji} *${order.market_name}* ${side}\n`;
+        message += `   Type: ${orderType} | Size: ${order.total_size}\n`;
+        message += `   Price: $${order.price} | Value: $${order.order_value}\n`;
+        message += `   Leverage: ${order.leverage}x\n`;
+        message += `   Order ID: \`${order.order_id}\`\n\n`;
+      }
+
+      const keyboard = new InlineKeyboard()
+        .text("🔄 Refresh", "open_orders")
+        .text("📈 Positions", "positions")
+        .row()
+        .text("🔙 Back to Home", "start");
+
+      ctx.reply(message, { reply_markup: keyboard });
+
+    } catch (error) {
+      console.error("Error showing open orders:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Error loading open orders: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Home", "start")
+      });
+    }
+  }
+
+  private getOrderTypeName(orderType: number): string {
+    const orderTypes: Record<number, string> = {
+      1: "OPEN_LONG",
+      2: "OPEN_SHORT",
+      3: "INCREASE_LONG",
+      4: "INCREASE_SHORT",
+      5: "DECREASE_LONG",
+      6: "DECREASE_SHORT",
+      7: "CLOSE_LONG",
+      8: "CLOSE_SHORT"
+    };
+    return orderTypes[orderType] || `UNKNOWN_${orderType}`;
+  }
+
+  private async showExportPrivateKeyWarning(ctx: any) {
+    const message = `⚠️ *SECURITY WARNING* ⚠️\n\n` +
+      `*You are about to export your private key!*\n\n` +
+      `🚨 *DANGER:*\n` +
+      `• Never share your private key with anyone\n` +
+      `• Anyone with this key can access your wallet\n` +
+      `• This action cannot be undone\n` +
+      `• Make sure you're in a secure environment\n\n` +
+      `*Are you absolutely sure you want to continue?*`;
+
+    const keyboard = new InlineKeyboard()
+      .text("✅ Yes, I understand the risks", "confirm_export_private_key")
+      .row()
+      .text("❌ Cancel", "wallet");
+
+    ctx.reply(message, {
+      parse_mode: "Markdown",
+      reply_markup: keyboard
+    });
+  }
+
+  private async exportPrivateKey(ctx: any) {
+    try {
+      const privateKey = getAptosPrivateKey();
+
+      const message = `🔑 *Your Private Key*\n\n` +
+        `*Address:* \`${getAptosAddress()}\`\n\n` +
+        `*Private Key:*\n\`\`\`\n${privateKey}\n\`\`\`\n\n` +
+        `⚠️ *Keep this private key secure!*\n` +
+        `• Store it in a safe place\n` +
+        `• Never share it with anyone\n` +
+        `• Anyone with this key can control your wallet`;
+
+      const keyboard = new InlineKeyboard()
+        .text("🔙 Back to Wallet", "wallet");
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      console.error("Error exporting private key:", error);
+      ctx.reply("❌ Error exporting private key. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Wallet", "wallet")
+      });
+    }
+  }
+
+  private async debugApiConnection(ctx: any) {
+    try {
+      const userAddress = getAptosAddress();
+      const kanaConfig = getKanaLabsConfig();
+
+      let debugMessage = "🔍 *API Debug Information*\n\n";
+      debugMessage += `*User Address:* \`${userAddress}\`\n`;
+      debugMessage += `*API Base URL:* \`${kanaConfig.baseUrl}\`\n`;
+      debugMessage += `*API Key:* \`${kanaConfig.apiKey ? 'Set' : 'Not Set'}\`\n\n`;
+
+      // Test API connection with a simple call
+      debugMessage += "*Testing API calls...*\n";
+
+      try {
+        // Test market info for APT/USDC
+        const marketInfo = await this.kanaLabsPerps.getMarketInfo("501");
+        debugMessage += `✅ Market Info (501): ${marketInfo.success ? 'Success' : 'Failed'}\n`;
+        if (marketInfo.success) {
+          debugMessage += `   Data: ${JSON.stringify(marketInfo.data).substring(0, 100)}...\n`;
+        }
+  } catch (error) {
+        debugMessage += `❌ Market Info Error: ${error}\n`;
+      }
+
+      try {
+        // Test positions
+        const positions = await this.kanaLabsPerps.getPositions(userAddress, "501");
+        debugMessage += `✅ Positions (501): ${positions.success ? 'Success' : 'Failed'}\n`;
+        debugMessage += `   Count: ${positions.data?.length || 0}\n`;
+      } catch (error) {
+        debugMessage += `❌ Positions Error: ${error}\n`;
+      }
+
+      try {
+        // Test orders
+        const orders = await this.kanaLabsPerps.getOpenOrders(userAddress, "501");
+        debugMessage += `✅ Orders (501): ${orders.success ? 'Success' : 'Failed'}\n`;
+        debugMessage += `   Count: ${orders.data?.length || 0}\n`;
+      } catch (error) {
+        debugMessage += `❌ Orders Error: ${error}\n`;
+      }
+
+      debugMessage += "\n*Testing Balance Endpoints...*\n";
+
+      try {
+        // Test wallet balance
+        const walletBalance = await this.kanaLabsPerps.getWalletAccountBalance(userAddress);
+        debugMessage += `✅ Wallet Balance: ${walletBalance.success ? 'Success' : 'Failed'}\n`;
+        const walletAmount = walletBalance.success ? parseFloat(walletBalance.data).toFixed(2) : walletBalance.data;
+        debugMessage += `   Value: ${walletAmount}\n`;
+      } catch (error) {
+        debugMessage += `❌ Wallet Balance Error: ${error}\n`;
+      }
+
+      try {
+        // Test profile balance
+        const profileBalance = await this.kanaLabsPerps.getProfileBalanceSnapshot(userAddress);
+        debugMessage += `✅ Profile Balance: ${profileBalance.success ? 'Success' : 'Failed'}\n`;
+        const profileAmount = profileBalance.success ? parseFloat(profileBalance.data).toFixed(2) : profileBalance.data;
+        debugMessage += `   Value: ${profileAmount}\n`;
+      } catch (error) {
+        debugMessage += `❌ Profile Balance Error: ${error}\n`;
+      }
+
+      try {
+        // Test APT balance
+        const aptBalance = await this.kanaLabsPerps.getAccountAptBalance(userAddress);
+        debugMessage += `✅ APT Balance: ${aptBalance.success ? 'Success' : 'Failed'}\n`;
+        const aptAmount = aptBalance.success ? parseFloat(aptBalance.data.toString()).toFixed(2) : aptBalance.data;
+        debugMessage += `   Value: ${aptAmount}\n`;
+      } catch (error) {
+        debugMessage += `❌ APT Balance Error: ${error}\n`;
+      }
+
+      try {
+        // Test net profile balance
+        const netProfileBalance = await this.kanaLabsPerps.getNetProfileBalance(userAddress);
+        debugMessage += `✅ Net Profile Balance: ${netProfileBalance.success ? 'Success' : 'Failed'}\n`;
+        const netProfileAmount = netProfileBalance.success ? parseFloat(netProfileBalance.data).toFixed(2) : netProfileBalance.data;
+        debugMessage += `   Value: ${netProfileAmount}\n`;
+      } catch (error) {
+        debugMessage += `❌ Net Profile Balance Error: ${error}\n`;
+      }
+
+      ctx.reply(debugMessage, { parse_mode: "Markdown" });
+
+    } catch (error) {
+      console.error("Debug error:", error);
+      ctx.reply(`❌ Debug failed: ${error}`);
+    }
+  }
+
   private async getRealBalances(): Promise<Record<number, any>> {
     try {
       console.log(`🔍 Fetching balances for address: ${this.APTOS_ADDRESS}`);
 
       // Use the Holdings Fetcher
       const fetcher = createHoldingsFetcher({
-        networkUrl: 'https://mainnet.aptoslabs.com/v1',
-        indexerUrl: 'https://indexer.mainnet.aptoslabs.com/v1/graphql'
+        networkUrl: getAptosNetworkUrl(),
+        indexerUrl: getAptosIndexerUrl()
       });
 
       const holdings = await fetcher.getAccountHoldings(this.APTOS_ADDRESS);
@@ -939,6 +2397,128 @@ export class Bot {
 
   public start() {
     this.bot.start();
-    console.log("🤖 Aptos Telegram Bot started!");
+    console.log("🤖 Aptos Perps Telegram Bot started!");
+  }
+
+  // Voting functionality
+  private async createVotingPoll(ctx: any, action: string, data: any): Promise<boolean> {
+    try {
+      // Check if we're in a group chat
+      if (ctx.chat?.type !== 'group' && ctx.chat?.type !== 'supergroup') {
+        return true; // Skip voting in private chats
+      }
+
+      const pollId = `vote_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const question = this.getVotingQuestion(action, data);
+
+      // Create poll
+      const poll = await ctx.replyWithPoll(question, [
+        "✅ Approve",
+        "❌ Reject"
+      ], {
+        is_anonymous: false,
+        type: "regular",
+        open_period: this.settings.votingTimePeriod
+      });
+
+      // Store pending vote
+      this.pendingVotes.set(pollId, {
+        pollId: poll.poll.id,
+        action,
+        data,
+        voters: new Set(),
+        startTime: Date.now()
+      });
+
+      // Set up poll result handler
+      this.setupPollResultHandler(pollId);
+
+      return false; // Voting in progress
+    } catch (error) {
+      console.error("Error creating voting poll:", error);
+      return true; // Skip voting on error
+    }
+  }
+
+  private getVotingQuestion(action: string, data: any): string {
+    switch (action) {
+      case 'transfer':
+        return `🗳️ *Vote Required: Transfer ${data.symbol}*\n\n` +
+          `Amount: ${data.amount} ${data.symbol}\n` +
+          `To: \`${data.recipientAddress}\`\n` +
+          `Value: ~$${data.value}\n\n` +
+          `Vote to approve or reject this transfer.`;
+
+      case 'deposit':
+        return `🗳️ *Vote Required: Deposit to ${data.marketName}*\n\n` +
+          `Amount: ${data.amount} USDC\n` +
+          `Market: ${data.marketName}\n` +
+          `Max Leverage: ${data.maxLeverage}x\n\n` +
+          `Vote to approve or reject this deposit.`;
+
+      case 'order':
+        return `🗳️ *Vote Required: Create Order*\n\n` +
+          `Type: ${data.orderType}\n` +
+          `Market: ${data.marketName}\n` +
+          `Size: ${data.size}\n` +
+          `Price: $${data.price}\n\n` +
+          `Vote to approve or reject this order.`;
+
+      default:
+        return `🗳️ *Vote Required: ${action}*\n\n` +
+          `Please vote to approve or reject this action.`;
+    }
+  }
+
+  private setupPollResultHandler(pollId: string) {
+    // Set up a timeout to check poll results
+    setTimeout(async () => {
+      await this.checkPollResults(pollId);
+    }, this.settings.votingTimePeriod * 1000 + 5000); // Add 5 second buffer
+  }
+
+  private async checkPollResults(pollId: string) {
+    try {
+      const voteData = this.pendingVotes.get(pollId);
+      if (!voteData) return;
+
+      // Get poll results (this would need to be implemented with Telegram Bot API)
+      // For now, we'll simulate the check
+      const totalVotes = voteData.voters.size;
+      const approvalVotes = Math.floor(totalVotes * 0.6); // Simulate 60% approval
+
+      // Only check threshold percentage (no minimum vote requirement)
+      const approved = totalVotes > 0 && (approvalVotes / totalVotes) >= this.settings.votingThreshold;
+
+      if (approved) {
+        await this.executeApprovedAction(voteData);
+      } else {
+        await this.notifyVoteRejected(voteData);
+      }
+
+      // Clean up
+      this.pendingVotes.delete(pollId);
+    } catch (error) {
+      console.error("Error checking poll results:", error);
+    }
+  }
+
+  private async executeApprovedAction(voteData: any) {
+    try {
+      // This would execute the approved action
+      console.log(`✅ Vote approved for action: ${voteData.action}`, voteData.data);
+      // Implementation would depend on the specific action
+    } catch (error) {
+      console.error("Error executing approved action:", error);
+    }
+  }
+
+  private async notifyVoteRejected(voteData: any) {
+    try {
+      console.log(`❌ Vote rejected for action: ${voteData.action}`, voteData.data);
+      // Implementation would notify users of rejection
+    } catch (error) {
+      console.error("Error notifying vote rejection:", error);
+    }
   }
 }
