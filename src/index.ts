@@ -1,8 +1,8 @@
 /**
- * Aptos Telegram Bot - Main Entry Point
+ * Aptos Perps Telegram Bot - Main Entry Point
  *
- * A Telegram bot for trading on Aptos blockchain.
- * Features portfolio management, buy/sell operations, and real-time price tracking.
+ * A Telegram bot for perpetual futures trading on Aptos blockchain.
+ * Features portfolio management, perps trading, and real-time price tracking.
  */
 
 import { Bot } from './bot/bot.js';
