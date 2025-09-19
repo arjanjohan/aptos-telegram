@@ -8,6 +8,7 @@ import { Bot as GrammyBot, InlineKeyboard } from "grammy";
 import { Aptos, AptosConfig, Account, Ed25519PrivateKey, type InputEntryFunctionData, type MoveFunctionId } from "@aptos-labs/ts-sdk";
 import { createHoldingsFetcher } from "../services/holdings-fetcher.js";
 import { getPrice, calculateUSDValue, getCoinList } from "../utils/usd-value-utils.js";
+import { getMarkets, findMarketById, type Market } from "../config/markets.js";
 import {
   getAptosConfig,
   getTelegramConfig,
@@ -1423,20 +1424,16 @@ export class Bot {
 
   private async showMarketSelection(ctx: any) {
     try {
-      // Get testnet markets from Kana Labs documentation
-      const testnetMarkets = [
-        { market_id: "1338", asset: "APT-USD", description: "Aptos-based trading market" },
-        { market_id: "1339", asset: "BTC-USD", description: "Bitcoin-based trading market" },
-        { market_id: "1340", asset: "ETH-USD", description: "Ethereum-based trading market" },
-        { market_id: "2387", asset: "SOL-USD", description: "Solana-based trading market" }
-      ];
+      // Get markets based on current network configuration
+      const isTestnet = getNetworkType() === 'testnet';
+      const markets = getMarkets(isTestnet);
 
       let message = "📊 *Markets*\n\n";
       message += "Select a market to view details and trade:\n\n";
 
       const keyboard = new InlineKeyboard();
 
-      testnetMarkets.forEach((market) => {
+      markets.forEach((market) => {
         keyboard.text(`${market.asset}`, `select_market_${market.market_id}`);
         keyboard.row();
       });
@@ -1458,14 +1455,8 @@ export class Bot {
   private async showMarketDetails(ctx: any, marketId: string) {
     try {
       // Get market info
-      const testnetMarkets = [
-        { market_id: "1338", asset: "APT-USD", description: "Aptos-based trading market" },
-        { market_id: "1339", asset: "BTC-USD", description: "Bitcoin-based trading market" },
-        { market_id: "1340", asset: "ETH-USD", description: "Ethereum-based trading market" },
-        { market_id: "2387", asset: "SOL-USD", description: "Solana-based trading market" }
-      ];
-
-      const market = testnetMarkets.find(m => m.market_id === marketId);
+      const isTestnet = getNetworkType() === 'testnet';
+      const market = findMarketById(marketId, isTestnet);
       if (!market) {
         ctx.reply("❌ Market not found.");
         return;
@@ -1550,14 +1541,8 @@ export class Bot {
 
   private async showChart(ctx: any, marketId: string) {
     try {
-      const testnetMarkets = [
-        { market_id: "1338", asset: "APT-USD", description: "Aptos-based trading market" },
-        { market_id: "1339", asset: "BTC-USD", description: "Bitcoin-based trading market" },
-        { market_id: "1340", asset: "ETH-USD", description: "Ethereum-based trading market" },
-        { market_id: "2387", asset: "SOL-USD", description: "Solana-based trading market" }
-      ];
-
-      const market = testnetMarkets.find(m => m.market_id === marketId);
+      const isTestnet = getNetworkType() === 'testnet';
+      const market = findMarketById(marketId, isTestnet);
       if (!market) {
         ctx.reply("❌ Market not found.");
         return;
@@ -1633,14 +1618,8 @@ export class Bot {
 
   private async showOrderBook(ctx: any, marketId: string) {
     try {
-      const testnetMarkets = [
-        { market_id: "1338", asset: "APT-USD", description: "Aptos-based trading market" },
-        { market_id: "1339", asset: "BTC-USD", description: "Bitcoin-based trading market" },
-        { market_id: "1340", asset: "ETH-USD", description: "Ethereum-based trading market" },
-        { market_id: "2387", asset: "SOL-USD", description: "Solana-based trading market" }
-      ];
-
-      const market = testnetMarkets.find(m => m.market_id === marketId);
+      const isTestnet = getNetworkType() === 'testnet';
+      const market = findMarketById(marketId, isTestnet);
       if (!market) {
         ctx.reply("❌ Market not found.");
         return;
@@ -1698,14 +1677,8 @@ export class Bot {
   private async showOrderSizeInput(ctx: any, marketId: string, orderSide: string) {
     try {
       // Get market info
-      const testnetMarkets = [
-        { market_id: "1338", asset: "APT-USD", description: "Aptos-based trading market" },
-        { market_id: "1339", asset: "BTC-USD", description: "Bitcoin-based trading market" },
-        { market_id: "1340", asset: "ETH-USD", description: "Ethereum-based trading market" },
-        { market_id: "2387", asset: "SOL-USD", description: "Solana-based trading market" }
-      ];
-
-      const market = testnetMarkets.find(m => m.market_id === marketId);
+      const isTestnet = getNetworkType() === 'testnet';
+      const market = findMarketById(marketId, isTestnet);
       if (!market) {
         ctx.reply("❌ Market not found.");
         return;
@@ -1778,14 +1751,8 @@ export class Bot {
       await ctx.reply("🔄 Placing order... Please wait.");
 
       // Get market info
-      const testnetMarkets = [
-        { market_id: "1338", asset: "APT-USD", description: "Aptos-based trading market" },
-        { market_id: "1339", asset: "BTC-USD", description: "Bitcoin-based trading market" },
-        { market_id: "1340", asset: "ETH-USD", description: "Ethereum-based trading market" },
-        { market_id: "2387", asset: "SOL-USD", description: "Solana-based trading market" }
-      ];
-
-      const market = testnetMarkets.find(m => m.market_id === marketId);
+      const isTestnet = getNetworkType() === 'testnet';
+      const market = findMarketById(marketId, isTestnet);
       if (!market) {
         ctx.reply("❌ Market not found.");
         return;
