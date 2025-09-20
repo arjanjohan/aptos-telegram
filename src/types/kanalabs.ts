@@ -44,6 +44,9 @@ export interface Order {
   order_id: string;
   trade_id: string;
   trade_side?: boolean; // true for long, false for short
+  timestamp?: number;
+  last_updated?: number;
+  market_name?: string;
 }
 
 export interface Position {
@@ -62,6 +65,7 @@ export interface Position {
   trade_id: string;
   price?: string; // current price
   pnl?: string; // profit/loss
+  market_name?: string;
 }
 
 export interface Trade {

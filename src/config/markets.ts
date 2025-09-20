@@ -1,3 +1,5 @@
+import { isTestnet } from './index.js';
+
 export interface Market {
   market_id: string;
   asset: string;
@@ -18,13 +20,13 @@ export const MAINNET_MARKETS: Market[] = [
   { market_id: "31", asset: "SOL-USD", description: "Solana-based trading market" }
 ];
 
-// Helper function to get markets based on environment
-export function getMarkets(isTestnet: boolean = true): Market[] {
-  return isTestnet ? TESTNET_MARKETS : MAINNET_MARKETS;
+// Helper function to get markets based on current network configuration
+export function getMarkets(): Market[] {
+  return isTestnet() ? TESTNET_MARKETS : MAINNET_MARKETS;
 }
 
-// Helper function to find a market by ID
-export function findMarketById(marketId: string, isTestnet: boolean = true): Market | undefined {
-  const markets = getMarkets(isTestnet);
+// Helper function to find a market by ID using current network configuration
+export function findMarketById(marketId: string): Market | undefined {
+  const markets = getMarkets();
   return markets.find(m => m.market_id === marketId);
 }

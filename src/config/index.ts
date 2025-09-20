@@ -80,11 +80,11 @@ class ConfigService {
   }
 
   private loadNetworkType(): NetworkType {
-    const network = process.env.APTOS_NETWORK || 'testnet'; // Default to testnet
+    const network = process.env.APTOS_NETWORK || 'mainnet'; // Default to mainnet
     if (['mainnet', 'testnet', 'devnet'].includes(network)) {
       return network as NetworkType;
     }
-    return 'testnet';
+    return 'mainnet';
   }
 
   private loadAptosConfig(networkType: NetworkType): AptosNetworkConfig {
@@ -112,15 +112,34 @@ class ConfigService {
   }
 
   private loadKanaLabsConfig(): KanaLabsConfig {
+    // Get network type to determine correct API URLs
+    const networkType = this.loadNetworkType();
+
+    // Use the same API key for all networks
     const apiKey = process.env.KANA_LABS_API_KEY;
     if (!apiKey) {
       throw new Error('KANA_LABS_API_KEY environment variable is required');
     }
 
+    const urls = {
+      mainnet: {
+        baseUrl: 'https://perps-tradeapi.kana.trade',
+        perpsApiUrl: 'https://perps-tradeapi.kana.trade'
+      },
+      testnet: {
+        baseUrl: 'https://perps-tradeapi.kanalabs.io',
+        perpsApiUrl: 'https://perps-tradeapi.kanalabs.io'
+      },
+      devnet: {
+        baseUrl: 'https://perps-tradeapi.kanalabs.io',
+        perpsApiUrl: 'https://perps-tradeapi.kanalabs.io'
+      }
+    };
+
     return {
       apiKey,
-      baseUrl: 'https://perps-tradeapi.kanalabs.io',
-      perpsApiUrl: 'https://perps-tradeapi.kanalabs.io'
+      baseUrl: urls[networkType].baseUrl,
+      perpsApiUrl: urls[networkType].perpsApiUrl
     };
   }
 
@@ -195,7 +214,15 @@ class ConfigService {
     if (network === Network.MAINNET) return 'mainnet';
     if (network === Network.TESTNET) return 'testnet';
     if (network === Network.DEVNET) return 'devnet';
-    return 'testnet';
+    return 'mainnet';
+  }
+
+  public isMainnet(): boolean {
+    return this.getNetworkType() === 'mainnet';
+  }
+
+  public isTestnet(): boolean {
+    return this.getNetworkType() === 'testnet';
   }
 
   // Convenience methods for common configurations
@@ -282,6 +309,8 @@ export const isDevelopment = () => config.isDevelopment();
 export const isProduction = () => config.isProduction();
 export const isTest = () => config.isTest();
 export const getNetworkType = () => config.getNetworkType();
+export const isMainnet = () => config.isMainnet();
+export const isTestnet = () => config.isTestnet();
 export const getAptosNetwork = () => config.getAptosNetwork();
 export const getAptosNetworkUrl = () => config.getAptosNetworkUrl();
 export const getAptosIndexerUrl = () => config.getAptosIndexerUrl();

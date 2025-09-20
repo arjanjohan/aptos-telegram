@@ -18,7 +18,8 @@ import {
   getAptosAddress,
   getAptosPrivateKey,
   getNetworkType,
-  getKanaLabsConfig
+  getKanaLabsConfig,
+  isTestnet
 } from "../config/index.js";
 import { KanaLabsPerpsService } from "../services/kanalabs-perps.js";
 
@@ -390,7 +391,9 @@ export class Bot {
         message += "\n";
       } catch (error) {
         console.error("Error fetching Kana Labs balances:", error);
-        message += "💰 *Your Balances*\n\n";
+
+        message += "❌ Unable to fetch your Kana Labs account\n\n";
+
         message += "💳 *Wallet Balance:* ❌ Unable to fetch\n";
         message += "💰 *Kana Balance:* ❌ Unable to fetch\n\n";
       }
@@ -1425,8 +1428,7 @@ export class Bot {
   private async showMarketSelection(ctx: any) {
     try {
       // Get markets based on current network configuration
-      const isTestnet = getNetworkType() === 'testnet';
-      const markets = getMarkets(isTestnet);
+      const markets = getMarkets();
 
       let message = "📊 *Markets*\n\n";
       message += "Select a market to view details and trade:\n\n";
@@ -1455,8 +1457,7 @@ export class Bot {
   private async showMarketDetails(ctx: any, marketId: string) {
     try {
       // Get market info
-      const isTestnet = getNetworkType() === 'testnet';
-      const market = findMarketById(marketId, isTestnet);
+      const market = findMarketById(marketId);
       if (!market) {
         ctx.reply("❌ Market not found.");
         return;
@@ -1541,8 +1542,7 @@ export class Bot {
 
   private async showChart(ctx: any, marketId: string) {
     try {
-      const isTestnet = getNetworkType() === 'testnet';
-      const market = findMarketById(marketId, isTestnet);
+      const market = findMarketById(marketId);
       if (!market) {
         ctx.reply("❌ Market not found.");
         return;
@@ -1618,8 +1618,7 @@ export class Bot {
 
   private async showOrderBook(ctx: any, marketId: string) {
     try {
-      const isTestnet = getNetworkType() === 'testnet';
-      const market = findMarketById(marketId, isTestnet);
+      const market = findMarketById(marketId);
       if (!market) {
         ctx.reply("❌ Market not found.");
         return;
@@ -1677,8 +1676,7 @@ export class Bot {
   private async showOrderSizeInput(ctx: any, marketId: string, orderSide: string) {
     try {
       // Get market info
-      const isTestnet = getNetworkType() === 'testnet';
-      const market = findMarketById(marketId, isTestnet);
+      const market = findMarketById(marketId);
       if (!market) {
         ctx.reply("❌ Market not found.");
         return;
@@ -1751,8 +1749,7 @@ export class Bot {
       await ctx.reply("🔄 Placing order... Please wait.");
 
       // Get market info
-      const isTestnet = getNetworkType() === 'testnet';
-      const market = findMarketById(marketId, isTestnet);
+      const market = findMarketById(marketId);
       if (!market) {
         ctx.reply("❌ Market not found.");
         return;
@@ -1808,8 +1805,8 @@ export class Bot {
     }
   }
 
-  private getTestnetMarketIds(): string[] {
-    return ["1338", "1339", "1340", "2387"];
+  private getMarketIds(): string[] {
+    return getMarkets().map(market => market.market_id);
   }
 
   private async getAvailableMarkets() {
@@ -1817,15 +1814,16 @@ export class Bot {
     try {
       console.log(`🔍 [MARKETS] Fetching available markets from API...`);
       // Note: The API doesn't have a direct "get all markets" endpoint
-      // So we'll use a combination of known testnet market IDs
-      const knownMarkets = [
-        { market_id: "501", base_name: "APT/USDC", max_leverage: "20", min_lots: "500" },
-        { market_id: "502", base_name: "BTC/USDC", max_leverage: "10", min_lots: "100" },
-        { market_id: "66", base_name: "SOL/USDC", max_leverage: "15", min_lots: "200" },
-        { market_id: "14", base_name: "ETH/USDC", max_leverage: "12", min_lots: "300" }
-      ];
+      // So we'll use the configured markets for the current network
+      const configuredMarkets = getMarkets();
+      const knownMarkets = configuredMarkets.map(market => ({
+        market_id: market.market_id,
+        base_name: market.asset,
+        max_leverage: "20", // Default leverage
+        min_lots: "100" // Default min lots
+      }));
 
-      console.log(`🔍 [MARKETS] Using known testnet markets:`, knownMarkets);
+      console.log(`🔍 [MARKETS] Using configured markets for ${isTestnet() ? 'testnet' : 'mainnet'}:`, knownMarkets);
       return knownMarkets;
     } catch (error) {
       console.error(`❌ [MARKETS] Error fetching markets, using fallback:`, error);
@@ -2277,14 +2275,14 @@ export class Bot {
       // Show processing message
       await ctx.reply("🔄 Processing withdraw... Please wait.");
 
-      // Get all testnet market IDs
-      const testnetMarketIds = this.getTestnetMarketIds();
+      // Get all market IDs for current network
+      const marketIds = this.getMarketIds();
 
       // Call Kana Labs withdraw API to get transaction payload
       const withdrawResult = await this.kanaLabsPerps.withdraw({
         amount: pendingDeposit.amount || '0',
         userAddress: this.APTOS_ADDRESS,
-        marketIds: testnetMarketIds.join(','),
+        marketIds: marketIds.join(','),
       });
 
       if (!withdrawResult.success) {
@@ -2466,12 +2464,23 @@ export class Bot {
         const pnlSign = pnl >= 0 ? "+" : "";
 
         message += `${sideEmoji} *${position.market_name}* ${side}\n`;
-        message += `   Size: ${position.size} | Leverage: ${position.leverage}x\n`;
+        message += `   Size: ${position.size} | Available: ${position.available_order_size || position.size}\n`;
         message += `   Entry: $${position.entry_price} | Current: $${position.price || 'N/A'}\n`;
         message += `   Value: $${position.value} | Margin: $${position.margin}\n`;
         message += `   PnL: ${pnlEmoji} ${pnlSign}$${pnl.toFixed(2)}\n`;
+
+        // Show Take Profit and Stop Loss if set
+        if (position.tp && position.tp !== "0") {
+          message += `   Take Profit: $${position.tp}\n`;
+        }
+        if (position.sl && position.sl !== "0") {
+          message += `   Stop Loss: $${position.sl}\n`;
+        }
         if (position.liq_price && position.liq_price !== "0") {
           message += `   Liq Price: $${position.liq_price}\n`;
+        }
+        if (position.trade_id) {
+          message += `   Trade ID: \`${position.trade_id}\`\n`;
         }
         message += "\n";
       }
@@ -2551,14 +2560,33 @@ export class Bot {
 
       for (const order of allOrders) {
         const orderType = this.getOrderTypeName(order.order_type);
-        const side = order.trade_side ? "LONG" : "SHORT";
-        const sideEmoji = order.trade_side ? "🟢" : "🔴";
+        // Determine side based on order type rather than trade_side
+        const isLongOrder = [1, 3, 5, 7].includes(order.order_type); // OPEN_LONG, INCREASE_LONG, DECREASE_LONG, CLOSE_LONG
+        const side = isLongOrder ? "LONG" : "SHORT";
+        const sideEmoji = isLongOrder ? "🟢" : "🔴";
+
+        // Calculate filled amount
+        const totalSize = parseFloat(order.total_size);
+        const remainingSize = parseFloat(order.remaining_size);
+        const filledSize = totalSize - remainingSize;
+        const filledPercentage = totalSize > 0 ? ((filledSize / totalSize) * 100).toFixed(1) : "0";
 
         message += `${sideEmoji} *${order.market_name}* ${side}\n`;
         message += `   Type: ${orderType} | Size: ${order.total_size}\n`;
+        message += `   Remaining: ${order.remaining_size} | Filled: ${filledSize.toFixed(4)} (${filledPercentage}%)\n`;
         message += `   Price: $${order.price} | Value: $${order.order_value}\n`;
         message += `   Leverage: ${order.leverage}x\n`;
-        message += `   Order ID: \`${order.order_id}\`\n\n`;
+        message += `   Order ID: \`${order.order_id}\`\n`;
+        if (order.trade_id) {
+          message += `   Trade ID: \`${order.trade_id}\`\n`;
+        }
+        if (order.timestamp) {
+          message += `   Placed: ${new Date(order.timestamp * 1000).toLocaleString()}\n`;
+        }
+        if (order.last_updated && order.last_updated !== order.timestamp) {
+          message += `   Updated: ${new Date(order.last_updated * 1000).toLocaleString()}\n`;
+        }
+        message += "\n";
       }
 
       const keyboard = new InlineKeyboard()
