@@ -3613,10 +3613,53 @@ export class Bot {
         liq_price: position.liq_price
       });
 
+
+      // Get current market price and calculate PnL
+      let currentPrice = "N/A";
+      let calculatedPnl = 0;
+      let pnlPercentage = 0;
+
+      try {
+        console.log(`🔍 [POSITION_DETAILS] Fetching current price for market ${position.market_id}`);
+        const priceResult = await this.kanaLabsPerps.getMarketPrice(position.market_id);
+
+        if (priceResult.success && priceResult.data) {
+          // Calculate current price (average of bid and ask if available, or use single price)
+          if (priceResult.data.bestAskPrice && priceResult.data.bestBidPrice) {
+            const midPrice = (priceResult.data.bestAskPrice + priceResult.data.bestBidPrice) / 2;
+            currentPrice = midPrice.toFixed(3);
+          } else if (priceResult.data.price) {
+            currentPrice = parseFloat(priceResult.data.price).toFixed(3);
+          }
+
+          // Calculate PnL based on current price
+          const entryPrice = parseFloat(position.entry_price || "0");
+          const currentPriceNum = parseFloat(currentPrice);
+          const size = parseFloat(position.size || "0");
+
+          if (entryPrice > 0 && currentPriceNum > 0 && size > 0) {
+            if (position.trade_side) {
+              // LONG position: PnL = (current_price - entry_price) * size
+              calculatedPnl = (currentPriceNum - entryPrice) * size;
+            } else {
+              // SHORT position: PnL = (entry_price - current_price) * size
+              calculatedPnl = (entryPrice - currentPriceNum) * size;
+            }
+
+            // Calculate PnL percentage based on margin
+            const margin = parseFloat(position.margin || "0");
+            if (margin > 0) {
+              pnlPercentage = (calculatedPnl / margin) * 100;
+            }
+          }
+        }
+      } catch (error) {
+        console.error(`Error fetching market price for ${position.market_id}:`, error);
+      }
       // Format detailed position information
       const side = position.trade_side ? "LONG" : "SHORT";
       const sideEmoji = position.trade_side ? "🟢" : "🔴";
-      const pnl = parseFloat(position.pnl || "0");
+      const pnl = calculatedPnl;
       const pnlEmoji = pnl >= 0 ? "📈" : "📉";
       const pnlSign = pnl >= 0 ? "+" : "";
 
@@ -3625,10 +3668,10 @@ export class Bot {
       message += `${sideEmoji} *${marketName}* ${side}\n\n`;
       message += `**Position Info:**\n`;
       message += `   Size: ${position.size} | Available: ${position.available_order_size || position.size}\n`;
-      message += `   Entry: ${this.formatDollar(position.entry_price)} | Current: ${this.formatDollar(position.price)}\n`;
+      message += `   Entry: ${this.formatDollar(position.entry_price)} | Current: $${currentPrice}\n`;
       message += `   Value: ${this.formatDollar(position.value)} | Margin: ${this.formatDollar(position.margin)}\n`;
       message += `   Leverage: ${position.leverage}x\n`;
-      message += `   PnL: ${pnlEmoji} ${pnlSign}${this.formatDollar(pnl)}\n\n`;
+      message += `   PnL: ${pnlEmoji} ${pnlSign}${this.formatDollar(pnl)} (${pnlPercentage.toFixed(2)}%)\n\n`;
 
       message += `**Risk Management:**\n`;
       if (position.tp && position.tp !== "0") {
