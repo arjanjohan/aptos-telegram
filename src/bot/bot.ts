@@ -38,8 +38,6 @@ export class Bot {
   // TODO: Move to database
   private settings = {
     disableConfirmation: false,
-    defaultTransferAmounts: [25, 50], // 25%, 50% - 100% and custom are always present
-    defaultBuyAmounts: [100, 200, 500], // $100, $200, $500 - custom is always present
     minimumDisplayAmount: 0, // Minimum USD value to display positions
     votingTimePeriod: 300, // Voting time in seconds (5 minutes)
     votingThreshold: 0.5 // Approval threshold (0.0 to 1.0 = 0% to 100%)
@@ -72,10 +70,6 @@ export class Bot {
       await this.showHomepage(ctx);
     });
 
-    // Portfolio command
-    this.bot.command("portfolio", async (ctx) => {
-      await this.showPortfolio(ctx);
-    });
 
     // Settings command
     this.bot.command("settings", (ctx) => {
@@ -109,19 +103,12 @@ export class Bot {
       const pendingTransfer = this.pendingTransfers.get(userId);
       if (pendingTransfer) {
         if (pendingTransfer.step === 'address') {
-          await this.handleAddressInput(ctx, pendingTransfer, text);
-        } else if (pendingTransfer.step === 'amount') {
-          await this.handleAmountInput(ctx, pendingTransfer, text);
         } else if (pendingTransfer.step === 'min_display_input') {
           await this.handleMinDisplayInput(ctx, text);
       } else if (pendingTransfer.step === 'voting_time_input') {
         await this.handleVotingTimeInput(ctx, text);
       } else if (pendingTransfer.step === 'voting_threshold_input') {
         await this.handleVotingThresholdInput(ctx, text);
-      } else if (pendingTransfer.step === 'transfer_amount_input') {
-        await this.handleTransferAmountInput(ctx, text);
-      } else if (pendingTransfer.step === 'buy_amount_input') {
-        await this.handleBuyAmountInput(ctx, text);
       } else if (pendingTransfer.step === 'order_size_input') {
         await this.handleOrderSizeInput(ctx, text);
       } else if (pendingTransfer.step === 'custom_leverage_input') {
@@ -152,7 +139,6 @@ export class Bot {
       // Check if it's a number command like /1, /2, etc. (only if not in input mode)
       if (/^\d+$/.test(text)) {
         const index = parseInt(text);
-        await this.showAssetOverview(ctx, index);
         return;
       }
     });
@@ -161,64 +147,7 @@ export class Bot {
     this.bot.on("callback_query:data", async (ctx) => {
       const data = ctx.callbackQuery.data;
 
-      if (data.startsWith("asset_")) {
-        const parts = data.split("_");
-        if (parts.length > 1 && parts[1]) {
-          const index = parseInt(parts[1]);
-          await this.showAssetOverview(ctx, index);
-        }
-      } else if (data.startsWith("buy_asset_")) {
-        const parts = data.split("_");
-        if (parts.length > 2 && parts[2]) {
-          const index = parseInt(parts[2]);
-          await this.showBuyOptions(ctx, index);
-        }
-      } else if (data.startsWith("sell_asset_")) {
-        const parts = data.split("_");
-        if (parts.length > 2 && parts[2]) {
-          const index = parseInt(parts[2]);
-          await this.showSellOptions(ctx, index);
-        }
-      } else if (data.startsWith("transfer_")) {
-        const parts = data.split("_");
-        if (parts.length > 1 && parts[1]) {
-          const index = parseInt(parts[1]);
-          await this.showTransferPrompt(ctx, index);
-        }
-      } else if (data.startsWith("enter_address_")) {
-        const parts = data.split("_");
-        if (parts.length > 2 && parts[2]) {
-          const index = parseInt(parts[2]);
-          await this.promptForAddress(ctx, index);
-        }
-      } else if (data.startsWith("address_book_")) {
-        const parts = data.split("_");
-        if (parts.length > 2 && parts[2]) {
-          const index = parseInt(parts[2]);
-          await this.showAddressBook(ctx, index);
-        }
-      } else if (data.startsWith("confirm_transfer_")) {
-        const parts = data.split("_");
-        if (parts.length > 2 && parts[2]) {
-          const index = parseInt(parts[2]);
-          await this.executeTransfer(ctx, index);
-        }
-      } else if (data.startsWith("amount_")) {
-        const parts = data.split("_");
-        if (parts.length > 2 && parts[1] && parts[2]) {
-          const percentage = parts[1];
-          const index = parseInt(parts[2]);
-          await this.handlePercentageAmount(ctx, index, percentage);
-        }
-      } else if (data.startsWith("custom_amount_")) {
-        const parts = data.split("_");
-        if (parts.length > 2 && parts[2]) {
-          const index = parseInt(parts[2]);
-          await this.promptCustomAmount(ctx, index);
-        }
-      } else if (data === "portfolio") {
-        await this.showPortfolio(ctx);
-      } else if (data === "settings") {
+      if (data === "settings") {
         await this.showSettings(ctx);
       } else if (data === "start") {
         await this.showHomepage(ctx);
@@ -306,16 +235,6 @@ export class Bot {
         await this.promptVotingTimeInput(ctx);
       } else if (data === "set_voting_threshold") {
         await this.promptVotingThresholdInput(ctx);
-      } else if (data === "set_transfer_amount_1") {
-        await this.promptTransferAmountInput(ctx, 1);
-      } else if (data === "set_transfer_amount_2") {
-        await this.promptTransferAmountInput(ctx, 2);
-      } else if (data === "set_buy_amount_1") {
-        await this.promptBuyAmountInput(ctx, 1);
-      } else if (data === "set_buy_amount_2") {
-        await this.promptBuyAmountInput(ctx, 2);
-      } else if (data === "set_buy_amount_3") {
-        await this.promptBuyAmountInput(ctx, 3);
       } else if (data === "markets") {
         await this.showMarketSelection(ctx);
       } else if (data.startsWith("select_market_")) {
@@ -415,7 +334,6 @@ export class Bot {
         await this.promptWithdrawCustomAmount(ctx);
       }
     });
-
   }
 
   private getMainMenu(): InlineKeyboard {
@@ -518,40 +436,6 @@ export class Bot {
     }
   }
 
-  private async showPortfolio(ctx: any) {
-    try {
-      const holdings = await this.getRealBalances();
-
-      if (Object.keys(holdings).length === 0) {
-        ctx.reply("No holdings found. Your portfolio is empty.");
-        return;
-      }
-
-      let message = "📊 *Your Portfolio*\n\n";
-
-      Object.values(holdings).forEach((holding: any) => {
-        message += `*${holding.symbol}*\n`;
-        message += `   Amount: ${holding.amount}\n`;
-        message += `   Value: ${holding.value}\n\n`;
-      });
-
-      // Create keyboard with clickable asset buttons
-      const keyboard = new InlineKeyboard();
-      Object.values(holdings).forEach((holding: any) => {
-        keyboard.text(`/${holding.index} ${holding.symbol}`, `asset_${holding.index}`);
-      });
-      keyboard.row().text("🔙 Back to Home", "start");
-
-      ctx.reply(message, {
-      parse_mode: "Markdown",
-        reply_markup: keyboard
-      });
-    } catch (error) {
-      console.error("Error showing portfolio:", error);
-      ctx.reply("Error loading portfolio. Please try again.");
-    }
-  }
-
   private async showWallet(ctx: any) {
     try {
       const holdings = await this.getRealBalances();
@@ -595,10 +479,6 @@ export class Bot {
       `*--- TRANSACTION SETTINGS ---\n` +
         `*Transaction Confirmation:* ${this.settings.disableConfirmation ? '❌ Disabled' : '✅ Enabled'}\n` +
         `*Minimum Display Amount:* $${this.settings.minimumDisplayAmount}\n` +
-        `*Transfer Amount Buttons:*\n`   +
-        `${this.settings.defaultTransferAmounts[0]}% - ${this.settings.defaultTransferAmounts[1]}% - 100% - custom \n` +
-        `*Buy Amount Buttons:*\n` +
-        `$${this.settings.defaultBuyAmounts[0]} - $${this.settings.defaultBuyAmounts[1]} - $${this.settings.defaultBuyAmounts[2]} - custom \n\n` +
         `*--- VOTING SETTINGS ---*\n` +
         `*Voting Time:* ${votingTimeMinutes} minutes\n` +
         `*Approval Threshold:* ${votingThresholdPercent}%\n\n` +
@@ -609,19 +489,6 @@ export class Bot {
         .text("Transaction Confirmation", "no_action")
         .row()
         .text(`${this.settings.disableConfirmation ? '❌ Disabled' : '✅ Enabled' }`, `toggle_confirmation`)
-        .row()
-        // Transfer Amount Buttons
-        .text("Transfer Amount Buttons", "no_action")
-        .row()
-        .text(`${this.settings.defaultTransferAmounts[0]}%`, "set_transfer_amount_1")
-        .text(`${this.settings.defaultTransferAmounts[1]}%`, "set_transfer_amount_2")
-        .row()
-        // Buy Amount Buttons
-        .text("Buy Amount Buttons", "no_action")
-        .row()
-        .text(`$${this.settings.defaultBuyAmounts[0]}`, "set_buy_amount_1")
-        .text(`$${this.settings.defaultBuyAmounts[1]}`, "set_buy_amount_2")
-        .text(`$${this.settings.defaultBuyAmounts[2]}`, "set_buy_amount_3")
         .row()
         // Minimum Display Amount setting
         .text("Minimum Display Amount", "no_action")
@@ -719,49 +586,7 @@ export class Bot {
     }
   }
 
-  private async promptTransferAmountInput(ctx: any, buttonIndex: number) {
-    const currentValue = this.settings.defaultTransferAmounts[buttonIndex - 1];
-    const message = `⚙️ *Set Transfer Amount Button *\n\n` +
-      `Current value: ${currentValue}%\n\n` +
-      `Please enter the new percentage value for this button.\n` +
-      `Send a number (e.g., 30 for 30%, 75 for 75%):`;
 
-    const keyboard = new InlineKeyboard()
-      .text("❌ Cancel", "settings");
-
-    ctx.reply(message, {
-      parse_mode: "Markdown",
-      reply_markup: keyboard
-    });
-
-    // Store the user's state for input handling
-    const userId = ctx.from?.id;
-    if (userId) {
-      this.pendingTransfers.set(userId, { assetIndex: buttonIndex, step: 'transfer_amount_input' });
-    }
-  }
-
-  private async promptBuyAmountInput(ctx: any, buttonIndex: number) {
-    const currentValue = this.settings.defaultBuyAmounts[buttonIndex - 1];
-    const message = `⚙️ *Set Buy Amount Button*\n\n` +
-      `Current value: $${currentValue}\n\n` +
-      `Please enter the new USD amount for this button.\n` +
-      `Send a number (e.g., 50, 100, 250):`;
-
-    const keyboard = new InlineKeyboard()
-      .text("❌ Cancel", "settings");
-
-    ctx.reply(message, {
-      parse_mode: "Markdown",
-      reply_markup: keyboard
-    });
-
-    // Store the user's state for input handling
-    const userId = ctx.from?.id;
-    if (userId) {
-      this.pendingTransfers.set(userId, { assetIndex: buttonIndex, step: 'buy_amount_input' });
-    }
-  }
 
   private async handleMinDisplayInput(ctx: any, text: string) {
     try {
@@ -840,77 +665,7 @@ export class Bot {
     }
   }
 
-  private async handleTransferAmountInput(ctx: any, text: string) {
-    try {
-      const percent = parseFloat(text);
 
-      if (isNaN(percent) || percent < 0 || percent > 100) {
-        ctx.reply("❌ Invalid percentage. Please enter a number between 0 and 100:");
-        return;
-      }
-
-      // Get the button index from the pending transfer
-      const userId = ctx.from?.id;
-      if (!userId) return;
-
-      const pendingTransfer = this.pendingTransfers.get(userId);
-      if (!pendingTransfer) return;
-
-      const buttonIndex = pendingTransfer.assetIndex;
-      if (!buttonIndex || buttonIndex < 1 || buttonIndex > 2) {
-        ctx.reply("❌ Invalid button index.");
-        return;
-      }
-
-      // Update the transfer amount
-      this.settings.defaultTransferAmounts[buttonIndex - 1] = percent;
-
-      // Clear the pending transfer
-      this.pendingTransfers.delete(userId);
-
-      // Go directly back to settings
-      await this.showSettings(ctx);
-    } catch (error) {
-      console.error("Error handling transfer amount input:", error);
-      ctx.reply("❌ Error setting transfer amount. Please try again.");
-    }
-  }
-
-  private async handleBuyAmountInput(ctx: any, text: string) {
-    try {
-      const amount = parseFloat(text);
-
-      if (isNaN(amount) || amount <= 0) {
-        ctx.reply("❌ Invalid amount. Please enter a positive number (e.g., 50, 100, 250):");
-        return;
-      }
-
-      // Get the button index from the pending transfer
-      const userId = ctx.from?.id;
-      if (!userId) return;
-
-      const pendingTransfer = this.pendingTransfers.get(userId);
-      if (!pendingTransfer) return;
-
-      const buttonIndex = pendingTransfer.assetIndex;
-      if (!buttonIndex || buttonIndex < 1 || buttonIndex > 2) {
-        ctx.reply("❌ Invalid button index.");
-        return;
-      }
-
-      // Update the buy amount
-      this.settings.defaultBuyAmounts[buttonIndex - 1] = amount;
-
-      // Clear the pending transfer
-      this.pendingTransfers.delete(userId);
-
-      // Go directly back to settings
-      await this.showSettings(ctx);
-    } catch (error) {
-      console.error("Error handling buy amount input:", error);
-      ctx.reply("❌ Error setting buy amount. Please try again.");
-    }
-  }
 
   private async handleOrderSizeInput(ctx: any, text: string) {
     try {
@@ -1129,7 +884,7 @@ export class Bot {
       // Clear pending transfer
       this.pendingTransfers.delete(ctx.from?.id);
 
-    } catch (error) {
+          } catch (error) {
       console.error("Error handling stop loss input:", error);
       ctx.reply("❌ Error processing stop loss price. Please try again.");
     }
@@ -1274,15 +1029,15 @@ export class Bot {
           .text("🔙 Back to Position", `position_details_${tradeId}`)
           .text("🔙 Back to Positions", "positions");
 
-        ctx.reply(message, {
+      ctx.reply(message, {
           reply_markup: keyboard,
           parse_mode: "Markdown"
-        });
+      });
       } else {
         throw new Error(result.message);
       }
 
-    } catch (error) {
+          } catch (error) {
       console.error("Error executing take profit:", error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       ctx.reply(`❌ Error setting take profit: ${errorMessage}`, {
@@ -1652,586 +1407,18 @@ export class Bot {
     return `$${numValue.toFixed(2)}`;
   }
 
-  private async showAssetOverview(ctx: any, index: number) {
-    try {
-      const holdings = await this.getRealBalances();
-      const holding = holdings[index];
 
-      if (!holding) {
-        ctx.reply("Asset not found.");
-        return;
-      }
 
-      const keyboard = new InlineKeyboard()
-        .text("💰 Buy", `buy_${index}`)
-        .text("💸 Sell", `sell_${index}`)
-        .row()
-        .text("🔄 Transfer", `transfer_${index}`)
-        .text("🔙 Back", "portfolio");
 
-      const message = `*${holding.symbol} Overview*\n\n` +
-        `*Name:* ${holding.name}\n` +
-        `*Amount:* ${holding.amount}\n` +
-        `*Price:* ${holding.price}\n` +
-        `*Value:* ${holding.value}\n` +
-        `*Type:* ${holding.isCoin ? 'Coin' : 'Fungible Asset'}\n` +
-        `*Asset ID:* \`${holding.assetType}\`\n` +
-        `*Market Cap:* Coming soon\n` +
-        `*24h Change:* Coming soon`;
 
-      ctx.reply(message, {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      });
-          } catch (error) {
-      console.error("Error showing asset overview:", error);
-      ctx.reply("Error loading asset details. Please try again.");
-    }
-  }
 
-  private async showBuyOptions(ctx: any, index: number) {
-    try {
-      const holdings = await this.getRealBalances();
-      const holding = holdings[index];
 
-      if (!holding) {
-        ctx.reply("Asset not found.");
-        return;
-      }
 
-      const keyboard = new InlineKeyboard()
-        .text("📝 Enter Amount", `buy_amount_${index}`)
-        .text("25%", `buy_25_${index}`)
-        .text("50%", `buy_50_${index}`)
-        .text("100%", `buy_100_${index}`)
-        .row()
-        .text("🔙 Back to Buy Menu", "buy");
 
-      const message = `*Buy ${holding.symbol}*\n\n` +
-        `*Name:* ${holding.name}\n` +
-        `*Current Price:* ${holding.price}\n` +
-        `*Available Balance:* ${holding.amount} ${holding.symbol}\n\n` +
-        `Choose how much you want to buy:`;
 
-      ctx.reply(message, {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      });
-          } catch (error) {
-      console.error("Error showing buy options:", error);
-      ctx.reply("Error loading buy options. Please try again.");
-    }
-  }
 
-  private async showSellOptions(ctx: any, index: number) {
-    try {
-      const holdings = await this.getRealBalances();
-      const holding = holdings[index];
 
-      if (!holding) {
-        ctx.reply("Asset not found.");
-        return;
-      }
 
-      const keyboard = new InlineKeyboard()
-        .text("📝 Enter Amount", `sell_amount_${index}`)
-        .text("25%", `sell_25_${index}`)
-        .text("50%", `sell_50_${index}`)
-        .text("100%", `sell_100_${index}`)
-        .row()
-        .text("🔙 Back to Sell Menu", "sell");
-
-      const message = `*Sell ${holding.symbol}*\n\n` +
-        `*Name:* ${holding.name}\n` +
-        `*Current Price:* ${holding.price}\n` +
-        `*Available Balance:* ${holding.amount} ${holding.symbol}\n` +
-        `*Value:* ${holding.value}\n\n` +
-        `Choose how much you want to sell:`;
-
-      ctx.reply(message, {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      });
-    } catch (error) {
-      console.error("Error showing sell options:", error);
-      ctx.reply("Error loading sell options. Please try again.");
-    }
-  }
-
-  private async showTransferPrompt(ctx: any, index: number) {
-    try {
-      const holdings = await this.getRealBalances();
-      const holding = holdings[index];
-
-      if (!holding) {
-        ctx.reply("Asset not found.");
-        return;
-      }
-
-      const keyboard = new InlineKeyboard()
-        .text("📝 Enter Address", `enter_address_${index}`)
-        .text("📋 Address Book", `address_book_${index}`)
-        .row()
-        .text("🔙 Back to Asset", `asset_${index}`);
-
-      const message = `*Transfer ${holding.symbol}*\n\n` +
-        `*Available:* ${holding.amount} ${holding.symbol}\n` +
-        `*Value:* ${holding.value}\n\n` +
-        `Choose how to enter the recipient address:`;
-
-      ctx.reply(message, {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      });
-    } catch (error) {
-      console.error("Error showing transfer prompt:", error);
-      ctx.reply("Error loading transfer options. Please try again.");
-    }
-  }
-
-  private async promptForAddress(ctx: any, index: number) {
-    try {
-      const holdings = await this.getRealBalances();
-      const holding = holdings[index];
-
-      if (!holding) {
-        ctx.reply("Asset not found.");
-        return;
-      }
-
-      // Store the transfer context for this user
-      const userId = ctx.from?.id;
-      if (userId) {
-        // In a real implementation, you'd store this in a database
-        // For now, we'll use a simple in-memory store
-        this.pendingTransfers = this.pendingTransfers || new Map();
-        this.pendingTransfers.set(userId, { assetIndex: index, step: 'address' });
-      }
-
-      const keyboard = new InlineKeyboard()
-        .text("❌ Cancel", `transfer_${index}`);
-
-      const message = `*Enter Recipient Address*\n\n` +
-        `*Asset:* ${holding.symbol} (${holding.name})\n` +
-        `*Available:* ${holding.amount} ${holding.symbol}\n\n` +
-        `Please send the recipient's Aptos address as a message.\n` +
-        `The address should start with "0x" and be 64 characters long.`;
-
-      ctx.reply(message, {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      });
-          } catch (error) {
-      console.error("Error prompting for address:", error);
-      ctx.reply("Error loading address input. Please try again.");
-    }
-  }
-
-  private async showAddressBook(ctx: any, index: number) {
-    try {
-      const holdings = await this.getRealBalances();
-      const holding = holdings[index];
-
-      if (!holding) {
-        ctx.reply("Asset not found.");
-        return;
-      }
-
-      // For now, show a simple address book with common addresses
-      const keyboard = new InlineKeyboard()
-        .text("📝 Enter Custom Address", `enter_address_${index}`)
-        .row()
-        .text("🔙 Back to Transfer", `transfer_${index}`);
-
-      const message = `*Address Book*\n\n` +
-        `*Asset:* ${holding.symbol} (${holding.name})\n` +
-        `*Available:* ${holding.amount} ${holding.symbol}\n\n` +
-        `Address book feature coming soon!\n` +
-        `For now, please enter a custom address.`;
-
-      ctx.reply(message, {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      });
-    } catch (error) {
-      console.error("Error showing address book:", error);
-      ctx.reply("Error loading address book. Please try again.");
-    }
-  }
-
-  private async handleAddressInput(ctx: any, pendingTransfer: any, address: string) {
-    try {
-      // Validate address format
-      if (!address.startsWith('0x') || address.length !== 66) {
-        ctx.reply("❌ Invalid address format. Please enter a valid Aptos address (0x followed by 64 hex characters).");
-        return;
-      }
-
-      // Update pending transfer with address
-      pendingTransfer.recipientAddress = address;
-      pendingTransfer.step = 'amount';
-      this.pendingTransfers.set(ctx.from.id, pendingTransfer);
-
-      const holdings = await this.getRealBalances();
-      const holding = holdings[pendingTransfer.assetIndex];
-
-      const availableAmount = parseFloat(holding.amount);
-      const keyboard = new InlineKeyboard();
-
-      // Add percentage buttons based on settings
-      this.settings.defaultTransferAmounts.forEach(amount => {
-        keyboard.text(`${amount}%`, `amount_${amount}_${pendingTransfer.assetIndex}`);
-      });
-
-      keyboard.text("100%", `amount_100_${pendingTransfer.assetIndex}`)
-        .row()
-        .text("📝 Custom Amount", `custom_amount_${pendingTransfer.assetIndex}`)
-        .text("❌ Cancel", `transfer_${pendingTransfer.assetIndex}`);
-
-      const message = `*Enter Transfer Amount*\n\n` +
-        `*Asset:* ${holding.symbol} (${holding.name})\n` +
-        `*Recipient:* \`${address}\`\n` +
-        `*Available:* ${holding.amount} ${holding.symbol}\n\n` +
-        `Choose a percentage or enter a custom amount:`;
-
-      ctx.reply(message, {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      });
-    } catch (error) {
-      console.error("Error handling address input:", error);
-      ctx.reply("Error processing address. Please try again.");
-    }
-  }
-
-  private async handleAmountInput(ctx: any, pendingTransfer: any, amountText: string) {
-    try {
-      const holdings = await this.getRealBalances();
-      const holding = holdings[pendingTransfer.assetIndex];
-
-      if (!holding) {
-        ctx.reply("Asset not found.");
-        return;
-      }
-
-      // Parse amount
-      const amount = parseFloat(amountText);
-      if (isNaN(amount) || amount <= 0) {
-        ctx.reply("❌ Invalid amount. Please enter a positive number.");
-        return;
-      }
-
-      // Check if user has enough balance
-      const availableAmount = parseFloat(holding.amount);
-      if (amount > availableAmount) {
-        ctx.reply(`❌ Insufficient balance. You have ${holding.amount} ${holding.symbol}, but trying to transfer ${amount}.`);
-        return;
-      }
-
-      // Update pending transfer with amount
-      pendingTransfer.amount = amountText;
-      this.pendingTransfers.set(ctx.from.id, pendingTransfer);
-
-      // Show confirmation
-      await this.showTransferConfirmation(ctx, pendingTransfer);
-    } catch (error) {
-      console.error("Error handling amount input:", error);
-      ctx.reply("Error processing amount. Please try again.");
-    }
-  }
-
-  private async handlePercentageAmount(ctx: any, index: number, percentage: string) {
-    try {
-      const userId = ctx.from?.id;
-      if (!userId) return;
-
-      const pendingTransfer = this.pendingTransfers.get(userId);
-      if (!pendingTransfer || pendingTransfer.assetIndex !== index) {
-        ctx.reply("Transfer session expired. Please start over.");
-        return;
-      }
-
-      const holdings = await this.getRealBalances();
-      const holding = holdings[index];
-
-      if (!holding) {
-        ctx.reply("Asset not found.");
-        return;
-      }
-
-      const availableAmount = parseFloat(holding.amount);
-      const percentageValue = parseFloat(percentage);
-      const amount = (availableAmount * percentageValue) / 100;
-      const amountText = amount.toFixed(holding.decimals);
-
-      // Update pending transfer with amount
-      pendingTransfer.amount = amountText;
-      this.pendingTransfers.set(userId, pendingTransfer);
-
-      // Show confirmation
-      await this.showTransferConfirmation(ctx, pendingTransfer);
-        } catch (error) {
-      console.error("Error handling percentage amount:", error);
-      ctx.reply("Error processing amount. Please try again.");
-    }
-  }
-
-  private async promptCustomAmount(ctx: any, index: number) {
-    try {
-      const userId = ctx.from?.id;
-      if (!userId) return;
-
-      const pendingTransfer = this.pendingTransfers.get(userId);
-      if (!pendingTransfer || pendingTransfer.assetIndex !== index) {
-        ctx.reply("Transfer session expired. Please start over.");
-        return;
-      }
-
-      const holdings = await this.getRealBalances();
-      const holding = holdings[index];
-
-      if (!holding) {
-        ctx.reply("Asset not found.");
-        return;
-      }
-
-      // Update step to amount input
-      pendingTransfer.step = 'amount';
-      this.pendingTransfers.set(userId, pendingTransfer);
-
-      const keyboard = new InlineKeyboard()
-        .text("❌ Cancel", `transfer_${index}`);
-
-      const message = `*Enter Custom Amount*\n\n` +
-        `*Asset:* ${holding.symbol} (${holding.name})\n` +
-        `*Recipient:* \`${pendingTransfer.recipientAddress}\`\n` +
-        `*Available:* ${holding.amount} ${holding.symbol}\n\n` +
-        `Please enter the exact amount to transfer (e.g., "1.5" for 1.5 tokens):`;
-
-      ctx.reply(message, {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      });
-    } catch (error) {
-      console.error("Error prompting custom amount:", error);
-      ctx.reply("Error loading custom amount input. Please try again.");
-    }
-  }
-
-  private async showTransferConfirmation(ctx: any, pendingTransfer: any) {
-    try {
-      const holdings = await this.getRealBalances();
-      const holding = holdings[pendingTransfer.assetIndex];
-
-      const keyboard = new InlineKeyboard()
-        .text("✅ Confirm Transfer", `confirm_transfer_${pendingTransfer.assetIndex}`)
-        .text("❌ Cancel", `transfer_${pendingTransfer.assetIndex}`);
-
-      const message = `*Confirm Transfer*\n\n` +
-        `*Asset:* ${holding.symbol} (${holding.name})\n` +
-        `*Amount:* ${pendingTransfer.amount} ${holding.symbol}\n` +
-        `*Recipient:* \`${pendingTransfer.recipientAddress}\`\n` +
-        `*Value:* ~$${(parseFloat(pendingTransfer.amount) * (parseFloat(holding.price.replace('$', '')) || 0)).toFixed(2)}\n\n` +
-        `⚠️ *This action cannot be undone!*`;
-
-      ctx.reply(message, {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      });
-    } catch (error) {
-      console.error("Error showing transfer confirmation:", error);
-      ctx.reply("Error loading confirmation. Please try again.");
-    }
-  }
-
-  private async executeTransfer(ctx: any, index: number) {
-    try {
-      const userId = ctx.from?.id;
-      if (!userId) {
-        ctx.reply("Error: User not found.");
-        return;
-      }
-
-      const pendingTransfer = this.pendingTransfers.get(userId);
-      if (!pendingTransfer || pendingTransfer.assetIndex !== index) {
-        ctx.reply("Error: Transfer session expired. Please start over.");
-        return;
-      }
-
-      const holdings = await this.getRealBalances();
-      const holding = holdings[index];
-
-      if (!holding) {
-        ctx.reply("Asset not found.");
-        return;
-      }
-
-      // Show processing message
-      await ctx.reply("🔄 Processing transfer... Please wait.");
-
-      // Convert amount to raw units (considering decimals)
-      const amount = parseFloat(pendingTransfer.amount || '0');
-      const rawAmount = Math.floor(amount * Math.pow(10, holding.decimals));
-
-      let transactionHash: string;
-
-      if (holding.isCoin) {
-        // Transfer Coin (v1)
-        transactionHash = await this.transferCoin(
-          pendingTransfer.recipientAddress!,
-          holding.assetType,
-          rawAmount
-        );
-          } else {
-        // Transfer Fungible Asset (v2)
-        transactionHash = await this.transferFungibleAsset(
-          pendingTransfer.recipientAddress!,
-          holding.assetType,
-          rawAmount
-        );
-      }
-
-      // Clear pending transfer
-      this.pendingTransfers.delete(userId);
-
-      // Show success message
-      const networkType = getNetworkType();
-      const explorerUrl = this.getExplorerUrl(transactionHash);
-
-      const message = `✅ *Transfer Successful!*\n\n` +
-        `*Asset:* ${holding.symbol} (${holding.name})\n` +
-        `*Amount:* ${pendingTransfer.amount} ${holding.symbol}\n` +
-        `*Recipient:* \`${pendingTransfer.recipientAddress}\`\n` +
-        `*Transaction:* \`${transactionHash}\`\n` +
-        `*Network:* ${networkType}\n\n` +
-        `View on [Aptos Explorer](${explorerUrl})`;
-
-      const keyboard = new InlineKeyboard()
-        .text("📊 Back to Portfolio", "portfolio");
-
-      ctx.reply(message, {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      });
-
-        } catch (error) {
-      console.error("Error executing transfer:", error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      ctx.reply(`❌ Transfer failed: ${errorMessage}`);
-    }
-  }
-
-  private async transferCoin(recipientAddress: string, coinType: string, amount: number): Promise<string> {
-    try {
-      console.log(`🔄 Transferring coin:`, {
-        recipientAddress,
-        coinType,
-        amount,
-        privateKeyLength: this.APTOS_PRIVATE_KEY?.length,
-        privateKeyPrefix: this.APTOS_PRIVATE_KEY?.substring(0, 10)
-      });
-
-      // Validate private key format
-      if (!this.APTOS_PRIVATE_KEY) {
-        throw new Error("Private key not found in environment variables");
-      }
-
-      // Create private key and account
-      const privateKey = new Ed25519PrivateKey(this.APTOS_PRIVATE_KEY);
-      const account = Account.fromPrivateKey({ privateKey });
-
-      console.log(`✅ Account created:`, {
-        accountAddress: account.accountAddress
-      });
-
-      // Build transfer transaction
-      const transaction = await this.aptos.transaction.build.simple({
-        sender: account.accountAddress,
-        data: {
-          function: "0x1::aptos_account::transfer_coins",
-          typeArguments: [coinType],
-          functionArguments: [recipientAddress, amount],
-        },
-      });
-
-      // Sign and submit transaction
-      const senderAuthenticator = this.aptos.transaction.sign({
-        signer: account,
-        transaction,
-      });
-
-      const pendingTransaction = await this.aptos.transaction.submit.simple({
-        transaction,
-        senderAuthenticator,
-      });
-
-      await this.aptos.waitForTransaction({
-        transactionHash: pendingTransaction.hash,
-      });
-
-      return pendingTransaction.hash;
-    } catch (error) {
-      console.error("Error transferring coin:", error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Coin transfer failed: ${errorMessage}`);
-    }
-  }
-
-  private async transferFungibleAsset(recipientAddress: string, assetAddress: string, amount: number): Promise<string> {
-    try {
-      console.log(`🔄 Transferring fungible asset:`, {
-        recipientAddress,
-        assetAddress,
-        amount,
-        privateKeyLength: this.APTOS_PRIVATE_KEY?.length,
-        privateKeyPrefix: this.APTOS_PRIVATE_KEY?.substring(0, 10)
-      });
-
-      // Validate private key format
-      if (!this.APTOS_PRIVATE_KEY) {
-        throw new Error("Private key not found in environment variables");
-      }
-
-      // Create private key and account
-      const privateKey = new Ed25519PrivateKey(this.APTOS_PRIVATE_KEY);
-      const account = Account.fromPrivateKey({ privateKey });
-
-      console.log(`✅ Account created:`, {
-        accountAddress: account.accountAddress
-      });
-
-      // Build transfer transaction for fungible asset
-      const transaction = await this.aptos.transaction.build.simple({
-        sender: account.accountAddress,
-        data: {
-          function: "0x1::primary_fungible_store::transfer",
-          typeArguments: [],
-          functionArguments: [assetAddress, recipientAddress, amount],
-        },
-      });
-
-      // Sign and submit transaction
-      const senderAuthenticator = this.aptos.transaction.sign({
-        signer: account,
-        transaction,
-      });
-
-      const pendingTransaction = await this.aptos.transaction.submit.simple({
-        transaction,
-        senderAuthenticator,
-      });
-
-      await this.aptos.waitForTransaction({
-        transactionHash: pendingTransaction.hash,
-      });
-
-      return pendingTransaction.hash;
-    } catch (error) {
-      console.error("Error transferring fungible asset:", error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Fungible asset transfer failed: ${errorMessage}`);
-    }
-  }
 
   private async showMarketSelection(ctx: any) {
     try {
@@ -2523,8 +1710,8 @@ export class Bot {
           step: 'order_size_input',
           orderData: { marketId, orderSide, leverage, orderType, market } as any
         });
-      }
-    } catch (error) {
+          }
+        } catch (error) {
       console.error("Error showing order size input:", error);
       ctx.reply("❌ Error loading order form. Please try again.", {
         reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "markets")
@@ -2717,7 +1904,7 @@ export class Bot {
       message += `Leverage: ${leverage}x\n\n`;
 
       if (orderType === 'market') {
-        message += `⚠️ *This will place a market order immediately!*`;
+      message += `⚠️ *This will place a market order immediately!*`;
       } else {
         message += `⚠️ *This will place a limit order (price required)*`;
       }
@@ -2815,36 +2002,36 @@ export class Bot {
           });
 
           if (response.success) {
-            // Clear any pending order data
-            const userId = ctx.from?.id;
-            if (userId) {
-              this.pendingTransfers.delete(userId);
-            }
+      // Clear any pending order data
+      const userId = ctx.from?.id;
+      if (userId) {
+        this.pendingTransfers.delete(userId);
+      }
 
-            const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
-            const sideText = orderSide === 'long' ? 'Long' : 'Short';
+        const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
+        const sideText = orderSide === 'long' ? 'Long' : 'Short';
             const orderTypeEmoji = orderType === 'market' ? '⚡' : '📊';
             const orderTypeText = orderType === 'market' ? 'Market Order' : 'Limit Order';
 
-            const message = `✅ *Order Placed Successfully!*\n\n` +
-              `Market: ${market.asset}\n` +
-              `Side: ${sideEmoji} ${sideText}\n` +
+        const message = `✅ *Order Placed Successfully!*\n\n` +
+          `Market: ${market.asset}\n` +
+          `Side: ${sideEmoji} ${sideText}\n` +
               `Size: ${size} ${this.getAssetSymbol(market.asset)}\n` +
               `Type: ${orderTypeEmoji} ${orderTypeText}\n` +
               `Leverage: ${leverage}x\n\n` +
               `Transaction: \`${committedTxn.hash}\`\n` +
-              `Your order has been submitted to the market.`;
+          `Your order has been submitted to the market.`;
 
-            const keyboard = new InlineKeyboard()
-              .text("📊 View Positions", "positions")
-              .text("📋 View Orders", "open_orders")
-              .row()
-              .text("🔙 Back to Home", "start");
+        const keyboard = new InlineKeyboard()
+          .text("📊 View Positions", "positions")
+          .text("📋 View Orders", "open_orders")
+          .row()
+          .text("🔙 Back to Home", "start");
 
-            ctx.reply(message, {
-              parse_mode: "Markdown",
-              reply_markup: keyboard
-            });
+        ctx.reply(message, {
+          parse_mode: "Markdown",
+          reply_markup: keyboard
+        });
           } else {
             ctx.reply(`❌ Transaction failed: ${response.success}`, {
               reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "markets")
@@ -2857,7 +2044,7 @@ export class Bot {
             reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "markets")
           });
         }
-      } else {
+            } else {
         ctx.reply(`❌ Order failed: ${orderResult.message || 'Unknown error'}`, {
           reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "markets")
         });
