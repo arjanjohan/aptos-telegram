@@ -21,7 +21,8 @@ import type {
   PlaceOrderParams,
   CancelOrderParams,
   UpdateTakeProfitParams,
-  UpdateStopLossParams
+  UpdateStopLossParams,
+  AddMarginParams
 } from '../types/kanalabs.js';
 import { getKanaLabsConfig, getKanaLabsBaseUrl, getKanaLabsApiKey } from '../config/index.js';
 
@@ -121,7 +122,7 @@ export class KanaLabsPerpsService {
     if (!params.price) {
       throw new Error('Price is required for limit orders');
     }
-    return this.makeRequest<OrderPayload>('/placeLimitOrder', params, 'POST');
+    return this.makeRequest<OrderPayload>('/placeLimitOrder', params, 'GET');
   }
 
   /**
@@ -131,7 +132,7 @@ export class KanaLabsPerpsService {
     if (params.orderType !== 'market') {
       throw new Error('Order type must be "market" for placeMarketOrder');
     }
-    return this.makeRequest<OrderPayload>('/placeMarketOrder', params, 'POST');
+    return this.makeRequest<OrderPayload>('/placeMarketOrder', params, 'GET');
   }
 
   /**
@@ -252,10 +253,39 @@ export class KanaLabsPerpsService {
   }
 
   /**
+   * Get profile address for a user
+   */
+  async getProfileAddress(userAddress: string): Promise<ApiResponse<string>> {
+    return this.makeRequest<string>('/getProfileAddress', { userAddress });
+  }
+
+  /**
    * Update stop loss for a position
    */
   async updateStopLoss(params: UpdateStopLossParams): Promise<ApiResponse<OrderPayload>> {
     return this.makeRequest<OrderPayload>('/updateStopLoss', params);
+  }
+
+  /**
+   * Add margin to a position
+   */
+  async addMargin(params: AddMarginParams): Promise<ApiResponse<OrderPayload>> {
+    return this.makeRequest<OrderPayload>('/addMargin', params);
+  }
+
+  /**
+   * Get market order payload (for closing positions)
+   */
+  async getMarketOrderPayload(params: {
+    marketId: string;
+    tradeSide: boolean;
+    direction: boolean;
+    size: string;
+    leverage: number;
+    takeProfit?: number;
+    stopLoss?: number;
+  }): Promise<ApiResponse<OrderPayload>> {
+    return this.makeRequest<OrderPayload>('/placeMarketOrder', params, 'GET');
   }
 
   /**

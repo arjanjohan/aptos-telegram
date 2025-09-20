@@ -117,9 +117,11 @@ export interface WithdrawParams {
 
 export interface PlaceOrderParams {
   marketId: string;
-  side: boolean; // true for long, false for short
+  tradeSide: boolean; // true for long, false for short
+  direction: boolean; // false to open a position, true to close a position
   size: string;
-  price?: string; // optional for market orders
+  leverage: number;
+  price?: string; // optional for limit orders
   orderType: 'limit' | 'market';
 }
 
@@ -137,4 +139,10 @@ export interface UpdateStopLossParams {
   marketId: string;
   tradeSide: boolean;
   newStopLossPrice: string;
+}
+
+export interface AddMarginParams {
+  marketId: string;
+  tradeSide: boolean;
+  amount: string;
 }

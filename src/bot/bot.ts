@@ -30,7 +30,7 @@ export class Bot {
   private APTOS_ADDRESS: string;
   private APTOS_PRIVATE_KEY: string;
   private kanaLabsPerps: KanaLabsPerpsService;
-  private pendingTransfers: Map<number, { assetIndex: number; step: string; recipientAddress?: string; amount?: string; orderData?: { marketId: string; orderSide: string; market: any } }> = new Map();
+  private pendingTransfers: Map<number, { assetIndex?: number; step?: string; type?: string; recipientAddress?: string; amount?: string; orderData?: { marketId: string; orderSide: string; market: any }; tradeId?: string; marketId?: string; tradeSide?: boolean }> = new Map();
   private pendingDeposits: Map<number, { step: string; amount?: string }> = new Map();
   private pendingVotes: Map<string, { pollId: string; action: string; data: any; voters: Set<number>; startTime: number }> = new Map();
 
@@ -124,6 +124,14 @@ export class Bot {
         await this.handleBuyAmountInput(ctx, text);
       } else if (pendingTransfer.step === 'order_size_input') {
         await this.handleOrderSizeInput(ctx, text);
+      } else if (pendingTransfer.step === 'custom_leverage_input') {
+        await this.handleCustomLeverageInput(ctx, text);
+      } else if (pendingTransfer.type === 'set_take_profit') {
+        await this.handleTakeProfitInput(ctx, pendingTransfer, text);
+      } else if (pendingTransfer.type === 'set_stop_loss') {
+        await this.handleStopLossInput(ctx, pendingTransfer, text);
+      } else if (pendingTransfer.type === 'add_margin') {
+        await this.handleAddMarginInput(ctx, pendingTransfer, text);
         }
         return;
       }
@@ -226,6 +234,51 @@ export class Bot {
         await this.showOpenOrders(ctx);
       } else if (data === "positions") {
         await this.showPositions(ctx);
+      } else if (data.startsWith("position_details_")) {
+        const tradeId = data.replace("position_details_", "");
+        await this.showPositionDetails(ctx, tradeId);
+      } else if (data.startsWith("close_position_")) {
+        const tradeId = data.replace("close_position_", "");
+        await this.closePosition(ctx, tradeId);
+      } else if (data.startsWith("add_margin_")) {
+        const tradeId = data.replace("add_margin_", "");
+        await this.addMarginPrompt(ctx, tradeId);
+      } else if (data.startsWith("set_tp_")) {
+        const tradeId = data.replace("set_tp_", "");
+        await this.setTakeProfitPrompt(ctx, tradeId);
+      } else if (data.startsWith("set_sl_")) {
+        const tradeId = data.replace("set_sl_", "");
+        await this.setStopLossPrompt(ctx, tradeId);
+      } else if (data.startsWith("position_orders_")) {
+        const tradeId = data.replace("position_orders_", "");
+        await this.showPositionOrders(ctx, tradeId);
+      } else if (data.startsWith("position_history_")) {
+        const tradeId = data.replace("position_history_", "");
+        await this.showPositionHistory(ctx, tradeId);
+      } else if (data.startsWith("confirm_tp_")) {
+        const parts = data.replace("confirm_tp_", "").split("_");
+        const tradeId = parts[0];
+        const price = parts[1];
+        if (tradeId && price) {
+          await this.executeTakeProfit(ctx, tradeId, price);
+        }
+      } else if (data.startsWith("confirm_sl_")) {
+        const parts = data.replace("confirm_sl_", "").split("_");
+        const tradeId = parts[0];
+        const price = parts[1];
+        if (tradeId && price) {
+          await this.executeStopLoss(ctx, tradeId, price);
+        }
+      } else if (data.startsWith("confirm_close_")) {
+        const tradeId = data.replace("confirm_close_", "");
+        await this.executeClosePosition(ctx, tradeId);
+      } else if (data.startsWith("confirm_add_margin_")) {
+        const parts = data.replace("confirm_add_margin_", "").split("_");
+        const tradeId = parts[0];
+        const amount = parts[1];
+        if (tradeId && amount) {
+          await this.executeAddMargin(ctx, tradeId, amount);
+        }
       } else if (data === "faucet_usdt") {
         await this.executeFaucet(ctx);
       } else if (data === "export_private_key") {
@@ -271,12 +324,46 @@ export class Bot {
           const marketId = parts[2];
           await this.showMarketDetails(ctx, marketId);
         }
-      } else if (data.startsWith("order_type_")) {
+      } else if (data.startsWith("order_side_")) {
         const parts = data.split("_");
+        console.log(`🔍 [ORDER_SIDE] Button clicked: ${data}, parts:`, parts);
         if (parts.length > 3 && parts[2] && parts[3]) {
           const marketId = parts[2];
           const orderSide = parts[3]; // long or short
-          await this.showOrderSizeInput(ctx, marketId, orderSide);
+          console.log(`🔍 [ORDER_SIDE] Proceeding to leverage selection:`, { marketId, orderSide });
+          await this.showLeverageSelection(ctx, marketId, orderSide);
+        } else {
+          console.log(`❌ [ORDER_SIDE] Invalid parts length or missing data:`, parts);
+        }
+      } else if (data.startsWith("leverage_")) {
+        const parts = data.split("_");
+        console.log(`🔍 [LEVERAGE] Button clicked: ${data}, parts:`, parts);
+        console.log(`🔍 [LEVERAGE] Length check: ${parts.length} >= 4 = ${parts.length >= 4}`);
+        console.log(`🔍 [LEVERAGE] Parts check: parts[1]=${parts[1]}, parts[2]=${parts[2]}, parts[3]=${parts[3]}`);
+        if (parts.length >= 4 && parts[1] && parts[2] && parts[3]) {
+          const marketId = parts[1];
+          const orderSide = parts[2];
+          const leverage = parts[3];
+          console.log(`🔍 [LEVERAGE] Proceeding to order type selection:`, { marketId, orderSide, leverage });
+          await this.showOrderTypeSelection(ctx, marketId, orderSide, leverage);
+        } else {
+          console.log(`❌ [LEVERAGE] Invalid parts length or missing data:`, parts);
+        }
+      } else if (data.startsWith("leverage_custom_")) {
+        const parts = data.split("_");
+        if (parts.length > 4 && parts[2] && parts[3] && parts[4]) {
+          const marketId = parts[2];
+          const orderSide = parts[3];
+          await this.showCustomLeverageInput(ctx, marketId, orderSide);
+        }
+      } else if (data.startsWith("order_type_")) {
+        const parts = data.split("_");
+        if (parts.length > 5 && parts[2] && parts[3] && parts[4] && parts[5]) {
+          const marketId = parts[2];
+          const orderSide = parts[3];
+          const leverage = parts[4];
+          const orderType = parts[5]; // market or limit
+          await this.showOrderSizeInput(ctx, marketId, orderSide, leverage, orderType);
         }
       } else if (data.startsWith("chart_")) {
         const parts = data.split("_");
@@ -292,11 +379,13 @@ export class Bot {
         }
       } else if (data.startsWith("confirm_order_")) {
         const parts = data.split("_");
-        if (parts.length > 4 && parts[2] && parts[3] && parts[4]) {
+        if (parts.length > 6 && parts[2] && parts[3] && parts[4] && parts[5] && parts[6]) {
           const marketId = parts[2];
           const orderSide = parts[3];
-          const size = parseFloat(parts[4]);
-          await this.executeOrder(ctx, marketId, orderSide, size);
+          const leverage = parts[4];
+          const orderType = parts[5];
+          const size = parseFloat(parts[6]);
+          await this.executeOrder(ctx, marketId, orderSide, leverage, orderType, size);
         }
       } else if (data === "confirm_deposit") {
         await this.executeDeposit(ctx);
@@ -470,8 +559,13 @@ export class Bot {
       const aptBalance = aptHolding ? aptHolding.amount : '0';
       const aptValue = aptHolding ? aptHolding.value : '$0.00';
 
+      // Get profile address
+      const profileAddressResult = await this.kanaLabsPerps.getProfileAddress(this.APTOS_ADDRESS);
+      const profileAddress = profileAddressResult.success ? profileAddressResult.data : 'Not available';
+
       const message = `💳 *Wallet Information*\n\n` +
         `*Address:* \`${getAptosAddress()}\`\n` +
+        `*Profile Address:* \`${profileAddress}\`\n` +
         `*APT Balance:* ${aptBalance} APT\n` +
         `*APT Value:* ${aptValue}`;
 
@@ -763,7 +857,7 @@ export class Bot {
       if (!pendingTransfer) return;
 
       const buttonIndex = pendingTransfer.assetIndex;
-      if (buttonIndex < 1 || buttonIndex > 2) {
+      if (!buttonIndex || buttonIndex < 1 || buttonIndex > 2) {
         ctx.reply("❌ Invalid button index.");
         return;
       }
@@ -799,7 +893,7 @@ export class Bot {
       if (!pendingTransfer) return;
 
       const buttonIndex = pendingTransfer.assetIndex;
-      if (buttonIndex < 1 || buttonIndex > 2) {
+      if (!buttonIndex || buttonIndex < 1 || buttonIndex > 2) {
         ctx.reply("❌ Invalid button index.");
         return;
       }
@@ -834,14 +928,728 @@ export class Bot {
       const pendingTransfer = this.pendingTransfers.get(userId);
       if (!pendingTransfer || !pendingTransfer.orderData) return;
 
-      const { marketId, orderSide, market } = pendingTransfer.orderData;
+      const { marketId, orderSide, leverage, orderType, market } = pendingTransfer.orderData as any;
+
+      // Validate minimum order size
+      const minSize = this.getMinimumOrderSize(market.asset);
+      if (size < minSize) {
+        const minSizeText = this.getMinimumOrderSizeText(market.asset);
+        ctx.reply(`❌ Order size too small. Minimum: ${minSizeText}\n\nPlease enter a larger amount:`);
+        return;
+      }
 
       // Show order confirmation
-      await this.showOrderConfirmation(ctx, marketId, orderSide, market, size);
+      await this.showOrderConfirmation(ctx, marketId, orderSide, leverage, orderType, market, size);
     } catch (error) {
       console.error("Error handling order size input:", error);
       ctx.reply("❌ Error processing order size. Please try again.");
     }
+  }
+
+  private async handleCustomLeverageInput(ctx: any, text: string) {
+    try {
+      const leverage = parseFloat(text);
+
+      if (isNaN(leverage) || leverage < 1 || leverage > 20) {
+        ctx.reply("❌ Invalid leverage. Please enter a number between 1 and 20:");
+        return;
+      }
+
+      // Get the order data from the pending transfer
+      const userId = ctx.from?.id;
+      if (!userId) return;
+
+      const pendingTransfer = this.pendingTransfers.get(userId);
+      if (!pendingTransfer || !pendingTransfer.orderData) return;
+
+      const { marketId, orderSide, market } = pendingTransfer.orderData;
+
+      // Proceed to order type selection with custom leverage
+      await this.showOrderTypeSelection(ctx, marketId, orderSide, leverage.toString());
+    } catch (error) {
+      console.error("Error handling custom leverage input:", error);
+      ctx.reply("❌ Error processing leverage. Please try again.");
+    }
+  }
+
+  private async handleTakeProfitInput(ctx: any, pendingTransfer: any, text: string) {
+    try {
+      const price = parseFloat(text);
+
+      if (isNaN(price) || price <= 0) {
+        ctx.reply("❌ Invalid price. Please enter a positive number:");
+        return;
+      }
+
+      const { tradeId, marketId, tradeSide } = pendingTransfer;
+
+      // Get current price for validation
+      const userAddress = getAptosAddress();
+      const markets = await this.getAvailableMarkets();
+
+      const allPositions = [];
+      for (const market of markets) {
+        try {
+          const positionsResult = await this.kanaLabsPerps.getPositions(userAddress, market.market_id);
+          if (positionsResult.success && positionsResult.data.length > 0) {
+            const positionsWithMarket = positionsResult.data.map(pos => ({ ...pos, market_name: market.base_name }));
+            allPositions.push(...positionsWithMarket);
+          }
+        } catch (error) {
+          console.error(`Error fetching positions for market ${market.market_id}:`, error);
+        }
+      }
+
+      const position = allPositions.find(p => p.trade_id === tradeId);
+      if (!position) {
+        ctx.reply("❌ Position not found. It may have been closed.");
+        return;
+      }
+
+      const currentPrice = parseFloat(position.price || position.entry_price);
+
+      // Validate price based on position side
+      const isLong = tradeSide;
+      if (isLong && price <= currentPrice) {
+        ctx.reply(`❌ For LONG positions, take profit must be above current price (${this.formatDollar(currentPrice)}). Please try again:`);
+        return;
+      }
+      if (!isLong && price >= currentPrice) {
+        ctx.reply(`❌ For SHORT positions, take profit must be below current price (${this.formatDollar(currentPrice)}). Please try again:`);
+        return;
+      }
+
+      // Show confirmation
+      const sideText = isLong ? "LONG" : "SHORT";
+      const sideEmoji = isLong ? "🟢" : "🔴";
+
+      let message = `🎯 *Confirm Take Profit*\n\n`;
+      message += `${sideEmoji} *${sideText}* Position\n`;
+      message += `Take Profit Price: ${this.formatDollar(price)}\n\n`;
+      message += `This will set a take profit order at ${this.formatDollar(price)}`;
+
+      const keyboard = new InlineKeyboard()
+        .text("✅ Confirm", `confirm_tp_${tradeId}_${price}`)
+        .text("❌ Cancel", `position_details_${tradeId}`)
+        .row();
+
+      ctx.reply(message, {
+        reply_markup: keyboard,
+        parse_mode: "Markdown"
+      });
+
+      // Clear pending transfer
+      this.pendingTransfers.delete(ctx.from?.id);
+
+    } catch (error) {
+      console.error("Error handling take profit input:", error);
+      ctx.reply("❌ Error processing take profit price. Please try again.");
+    }
+  }
+
+  private async handleStopLossInput(ctx: any, pendingTransfer: any, text: string) {
+    try {
+      const price = parseFloat(text);
+
+      if (isNaN(price) || price <= 0) {
+        ctx.reply("❌ Invalid price. Please enter a positive number:");
+        return;
+      }
+
+      const { tradeId, marketId, tradeSide } = pendingTransfer;
+
+      // Get current price for validation
+      const userAddress = getAptosAddress();
+      const markets = await this.getAvailableMarkets();
+
+      const allPositions = [];
+      for (const market of markets) {
+        try {
+          const positionsResult = await this.kanaLabsPerps.getPositions(userAddress, market.market_id);
+          if (positionsResult.success && positionsResult.data.length > 0) {
+            const positionsWithMarket = positionsResult.data.map(pos => ({ ...pos, market_name: market.base_name }));
+            allPositions.push(...positionsWithMarket);
+          }
+        } catch (error) {
+          console.error(`Error fetching positions for market ${market.market_id}:`, error);
+        }
+      }
+
+      const position = allPositions.find(p => p.trade_id === tradeId);
+      if (!position) {
+        ctx.reply("❌ Position not found. It may have been closed.");
+        return;
+      }
+
+      const currentPrice = parseFloat(position.price || position.entry_price);
+
+      // Validate price based on position side
+      const isLong = tradeSide;
+      const liquidationPrice = parseFloat(position.liq_price);
+
+      if (isLong) {
+        if (price >= currentPrice) {
+          ctx.reply(`❌ For LONG positions, stop loss must be below current price (${this.formatDollar(currentPrice)}). Please try again:`);
+          return;
+        }
+        if (price <= liquidationPrice) {
+          ctx.reply(`❌ Stop loss must be above liquidation price (${this.formatDollar(liquidationPrice)}). Please try again:`);
+          return;
+        }
+      } else {
+        if (price <= currentPrice) {
+          ctx.reply(`❌ For SHORT positions, stop loss must be above current price (${this.formatDollar(currentPrice)}). Please try again:`);
+          return;
+        }
+        if (price >= liquidationPrice) {
+          ctx.reply(`❌ Stop loss must be below liquidation price (${this.formatDollar(liquidationPrice)}). Please try again:`);
+          return;
+        }
+      }
+
+      // Show confirmation
+      const sideText = isLong ? "LONG" : "SHORT";
+      const sideEmoji = isLong ? "🟢" : "🔴";
+
+      let message = `🛡️ *Confirm Stop Loss*\n\n`;
+      message += `${sideEmoji} *${sideText}* Position\n`;
+      message += `Stop Loss Price: ${this.formatDollar(price)}\n\n`;
+      message += `This will set a stop loss order at ${this.formatDollar(price)}`;
+
+      const keyboard = new InlineKeyboard()
+        .text("✅ Confirm", `confirm_sl_${tradeId}_${price}`)
+        .text("❌ Cancel", `position_details_${tradeId}`)
+        .row();
+
+      ctx.reply(message, {
+        reply_markup: keyboard,
+        parse_mode: "Markdown"
+      });
+
+      // Clear pending transfer
+      this.pendingTransfers.delete(ctx.from?.id);
+
+    } catch (error) {
+      console.error("Error handling stop loss input:", error);
+      ctx.reply("❌ Error processing stop loss price. Please try again.");
+    }
+  }
+
+  private async handleAddMarginInput(ctx: any, pendingTransfer: any, text: string) {
+    try {
+      const amount = parseFloat(text);
+
+      if (isNaN(amount) || amount <= 0) {
+        ctx.reply("❌ Invalid amount. Please enter a positive number:");
+        return;
+      }
+
+      if (amount < 1) {
+        ctx.reply("❌ Minimum margin amount is $1.00. Please enter a higher amount:");
+        return;
+      }
+
+      const { tradeId, marketId, tradeSide } = pendingTransfer;
+
+      // Show confirmation
+      const sideText = tradeSide ? "LONG" : "SHORT";
+      const sideEmoji = tradeSide ? "🟢" : "🔴";
+
+      let message = `💰 *Confirm Add Margin*\n\n`;
+      message += `${sideEmoji} *${sideText}* Position\n`;
+      message += `Amount to Add: ${this.formatDollar(amount)}\n\n`;
+      message += `This will add ${this.formatDollar(amount)} to your position's margin.`;
+
+      const keyboard = new InlineKeyboard()
+        .text("✅ Confirm", `confirm_add_margin_${tradeId}_${amount}`)
+        .text("❌ Cancel", `position_details_${tradeId}`)
+        .row();
+
+      ctx.reply(message, {
+        reply_markup: keyboard,
+        parse_mode: "Markdown"
+      });
+
+      // Clear pending transfer
+      this.pendingTransfers.delete(ctx.from?.id);
+
+    } catch (error) {
+      console.error("Error handling add margin input:", error);
+      ctx.reply("❌ Error processing margin amount. Please try again.");
+    }
+  }
+
+  private async executeTakeProfit(ctx: any, tradeId: string, price: string) {
+    try {
+      console.log(`🔍 [EXECUTE_TP] Executing take profit for trade ID: ${tradeId}, price: ${price}`);
+
+      // Get the position to find market details
+      const userAddress = getAptosAddress();
+      const markets = await this.getAvailableMarkets();
+
+      const allPositions = [];
+      for (const market of markets) {
+        try {
+          const positionsResult = await this.kanaLabsPerps.getPositions(userAddress, market.market_id);
+          if (positionsResult.success && positionsResult.data.length > 0) {
+            const positionsWithMarket = positionsResult.data.map(pos => ({ ...pos, market_name: market.base_name }));
+            allPositions.push(...positionsWithMarket);
+          }
+        } catch (error) {
+          console.error(`Error fetching positions for market ${market.market_id}:`, error);
+        }
+      }
+
+      const position = allPositions.find(p => p.trade_id === tradeId);
+
+      if (!position) {
+        ctx.reply("❌ Position not found. It may have been closed.", {
+          reply_markup: new InlineKeyboard().text("🔙 Back to Positions", "positions")
+        });
+        return;
+      }
+
+      // Show processing message
+      await ctx.reply("🔄 Setting take profit... Please wait.");
+
+      // Call the Kana Labs API
+      console.log(`🔍 [EXECUTE_TP] API Call params:`, {
+        marketId: position.market_id,
+        tradeSide: position.trade_side,
+        newTakeProfitPrice: price
+      });
+
+      const result = await this.kanaLabsPerps.updateTakeProfit({
+        marketId: position.market_id,
+        tradeSide: position.trade_side,
+        newTakeProfitPrice: price
+      });
+
+      console.log(`🔍 [EXECUTE_TP] API Response:`, result);
+
+      if (result.success) {
+        // The API returns a transaction payload that needs to be submitted to the blockchain
+        const payloadData = result.data;
+
+        console.log(`🔍 [EXECUTE_TP] Building transaction with payload:`, payloadData);
+
+        // Build the transaction
+        const transactionPayload = await this.aptos.transaction.build.simple({
+          sender: this.aptosAccount.accountAddress,
+          data: {
+            function: payloadData.function as `${string}::${string}::${string}`,
+            functionArguments: payloadData.functionArguments,
+            typeArguments: payloadData.typeArguments
+          }
+        });
+
+        console.log(`🔍 [EXECUTE_TP] Transaction built, signing and submitting...`);
+
+        // Sign and submit the transaction
+        const committedTxn = await this.aptos.transaction.signAndSubmitTransaction({
+          transaction: transactionPayload,
+          signer: this.aptosAccount,
+        });
+
+        console.log(`🔍 [EXECUTE_TP] Transaction submitted:`, committedTxn.hash);
+
+        // Wait for transaction confirmation
+        await this.aptos.waitForTransaction({
+          transactionHash: committedTxn.hash,
+        });
+
+        console.log(`🔍 [EXECUTE_TP] Transaction confirmed!`);
+
+        const marketName = position.market_name || `Market ${position.market_id}`;
+        const side = position.trade_side ? "LONG" : "SHORT";
+        const sideEmoji = position.trade_side ? "🟢" : "🔴";
+
+        let message = `✅ *Take Profit Set Successfully*\n\n`;
+        message += `${sideEmoji} *${marketName}* ${side}\n`;
+        message += `Take Profit Price: ${this.formatDollar(price)}\n\n`;
+        message += `Transaction Hash: \`${committedTxn.hash}\`\n\n`;
+        message += `Your take profit order has been placed and will execute when the price reaches ${this.formatDollar(price)}.`;
+
+        const keyboard = new InlineKeyboard()
+          .text("🔙 Back to Position", `position_details_${tradeId}`)
+          .text("🔙 Back to Positions", "positions");
+
+        ctx.reply(message, {
+          reply_markup: keyboard,
+          parse_mode: "Markdown"
+        });
+      } else {
+        throw new Error(result.message);
+      }
+
+    } catch (error) {
+      console.error("Error executing take profit:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Error setting take profit: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Position", `position_details_${tradeId}`)
+      });
+    }
+  }
+
+  private async executeStopLoss(ctx: any, tradeId: string, price: string) {
+    try {
+      console.log(`🔍 [EXECUTE_SL] Executing stop loss for trade ID: ${tradeId}, price: ${price}`);
+
+      // Get the position to find market details
+      const userAddress = getAptosAddress();
+      const markets = await this.getAvailableMarkets();
+
+      const allPositions = [];
+      for (const market of markets) {
+        try {
+          const positionsResult = await this.kanaLabsPerps.getPositions(userAddress, market.market_id);
+          if (positionsResult.success && positionsResult.data.length > 0) {
+            const positionsWithMarket = positionsResult.data.map(pos => ({ ...pos, market_name: market.base_name }));
+            allPositions.push(...positionsWithMarket);
+          }
+        } catch (error) {
+          console.error(`Error fetching positions for market ${market.market_id}:`, error);
+        }
+      }
+
+      const position = allPositions.find(p => p.trade_id === tradeId);
+
+      if (!position) {
+        ctx.reply("❌ Position not found. It may have been closed.", {
+          reply_markup: new InlineKeyboard().text("🔙 Back to Positions", "positions")
+        });
+        return;
+      }
+
+      // Show processing message
+      await ctx.reply("🔄 Setting stop loss... Please wait.");
+
+      // Call the Kana Labs API
+      console.log(`🔍 [EXECUTE_SL] API Call params:`, {
+        marketId: position.market_id,
+        tradeSide: position.trade_side,
+        newStopLossPrice: price
+      });
+
+      const result = await this.kanaLabsPerps.updateStopLoss({
+        marketId: position.market_id,
+        tradeSide: position.trade_side,
+        newStopLossPrice: price
+      });
+
+      console.log(`🔍 [EXECUTE_SL] API Response:`, result);
+
+      if (result.success) {
+        // The API returns a transaction payload that needs to be submitted to the blockchain
+        const payloadData = result.data;
+
+        console.log(`🔍 [EXECUTE_SL] Building transaction with payload:`, payloadData);
+
+        // Build the transaction
+        const transactionPayload = await this.aptos.transaction.build.simple({
+          sender: this.aptosAccount.accountAddress,
+          data: {
+            function: payloadData.function as `${string}::${string}::${string}`,
+            functionArguments: payloadData.functionArguments,
+            typeArguments: payloadData.typeArguments
+          }
+        });
+
+        console.log(`🔍 [EXECUTE_SL] Transaction built, signing and submitting...`);
+
+        // Sign and submit the transaction
+        const committedTxn = await this.aptos.transaction.signAndSubmitTransaction({
+          transaction: transactionPayload,
+          signer: this.aptosAccount,
+        });
+
+        console.log(`🔍 [EXECUTE_SL] Transaction submitted:`, committedTxn.hash);
+
+        // Wait for transaction confirmation
+        await this.aptos.waitForTransaction({
+          transactionHash: committedTxn.hash,
+        });
+
+        console.log(`🔍 [EXECUTE_SL] Transaction confirmed!`);
+
+        const marketName = position.market_name || `Market ${position.market_id}`;
+        const side = position.trade_side ? "LONG" : "SHORT";
+        const sideEmoji = position.trade_side ? "🟢" : "🔴";
+
+        let message = `✅ *Stop Loss Set Successfully*\n\n`;
+        message += `${sideEmoji} *${marketName}* ${side}\n`;
+        message += `Stop Loss Price: ${this.formatDollar(price)}\n\n`;
+        message += `Transaction Hash: \`${committedTxn.hash}\`\n\n`;
+        message += `Your stop loss order has been placed and will execute when the price reaches ${this.formatDollar(price)}.`;
+
+        const keyboard = new InlineKeyboard()
+          .text("🔙 Back to Position", `position_details_${tradeId}`)
+          .text("🔙 Back to Positions", "positions");
+
+        ctx.reply(message, {
+          reply_markup: keyboard,
+          parse_mode: "Markdown"
+        });
+      } else {
+        throw new Error(result.message);
+      }
+
+    } catch (error) {
+      console.error("Error executing stop loss:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Error setting stop loss: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Position", `position_details_${tradeId}`)
+      });
+    }
+  }
+
+  private async executeClosePosition(ctx: any, tradeId: string) {
+    try {
+      console.log(`🔍 [EXECUTE_CLOSE] Executing close position for trade ID: ${tradeId}`);
+
+      // Get the position to find market details
+      const userAddress = getAptosAddress();
+      const markets = await this.getAvailableMarkets();
+
+      const allPositions = [];
+      for (const market of markets) {
+        try {
+          const positionsResult = await this.kanaLabsPerps.getPositions(userAddress, market.market_id);
+          if (positionsResult.success && positionsResult.data.length > 0) {
+            const positionsWithMarket = positionsResult.data.map(pos => ({ ...pos, market_name: market.base_name }));
+            allPositions.push(...positionsWithMarket);
+          }
+        } catch (error) {
+          console.error(`Error fetching positions for market ${market.market_id}:`, error);
+        }
+      }
+
+      const position = allPositions.find(p => p.trade_id === tradeId);
+
+      if (!position) {
+        ctx.reply("❌ Position not found. It may have been closed.", {
+          reply_markup: new InlineKeyboard().text("🔙 Back to Positions", "positions")
+        });
+        return;
+      }
+
+      // Show processing message
+      await ctx.reply("🔄 Closing position... Please wait.");
+
+      // For closing a position, we need to reverse the direction
+      // If position is LONG (true), we need to SHORT (false) to close it
+      // If position is SHORT (false), we need to LONG (true) to close it
+      const closeSide = !position.trade_side;
+
+      console.log(`🔍 [EXECUTE_CLOSE] API Call params:`, {
+        marketId: position.market_id,
+        tradeSide: position.trade_side,
+        direction: true, // true to close a position
+        size: position.size,
+        leverage: position.leverage,
+        takeProfit: 0, // optional, default to 0
+        stopLoss: 0    // optional, default to 0
+      });
+
+      // Get market order payload to close the position
+      const result = await this.kanaLabsPerps.getMarketOrderPayload({
+        marketId: position.market_id,
+        size: position.size,
+        tradeSide: position.trade_side,
+        direction: true, // true to close a position
+        leverage: position.leverage,
+        takeProfit: 0, // optional, default to 0
+        stopLoss: 0    // optional, default to 0
+      });
+
+      console.log(`🔍 [EXECUTE_CLOSE] API Response:`, result);
+
+      if (result.success) {
+        // The API returns a transaction payload that needs to be submitted to the blockchain
+        const payloadData = result.data;
+
+        console.log(`🔍 [EXECUTE_CLOSE] Building transaction with payload:`, payloadData);
+
+        // Build the transaction
+        const transactionPayload = await this.aptos.transaction.build.simple({
+          sender: this.aptosAccount.accountAddress,
+          data: {
+            function: payloadData.function as `${string}::${string}::${string}`,
+            functionArguments: payloadData.functionArguments,
+            typeArguments: payloadData.typeArguments
+          }
+        });
+
+        console.log(`🔍 [EXECUTE_CLOSE] Transaction built, signing and submitting...`);
+
+        // Sign and submit the transaction
+        const committedTxn = await this.aptos.transaction.signAndSubmitTransaction({
+          transaction: transactionPayload,
+          signer: this.aptosAccount,
+        });
+
+        console.log(`🔍 [EXECUTE_CLOSE] Transaction submitted:`, committedTxn.hash);
+
+        // Wait for transaction confirmation
+        await this.aptos.waitForTransaction({
+          transactionHash: committedTxn.hash,
+        });
+
+        console.log(`🔍 [EXECUTE_CLOSE] Transaction confirmed!`);
+
+        const marketName = position.market_name || `Market ${position.market_id}`;
+        const side = position.trade_side ? "LONG" : "SHORT";
+        const sideEmoji = position.trade_side ? "🟢" : "🔴";
+
+        let message = `✅ *Position Closed Successfully*\n\n`;
+        message += `${sideEmoji} *${marketName}* ${side}\n`;
+        message += `Size: ${position.size}\n`;
+        message += `Closed with: ${closeSide ? "LONG" : "SHORT"} order\n\n`;
+        message += `Transaction Hash: \`${committedTxn.hash}\`\n\n`;
+        message += `Your position has been closed at market price.`;
+
+        const keyboard = new InlineKeyboard()
+          .text("🔙 Back to Positions", "positions")
+          .text("🏠 Home", "start");
+
+        ctx.reply(message, {
+          reply_markup: keyboard,
+          parse_mode: "Markdown"
+        });
+      } else {
+        throw new Error(result.message);
+      }
+
+    } catch (error) {
+      console.error("Error executing close position:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Error closing position: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Position", `position_details_${tradeId}`)
+      });
+    }
+  }
+
+  private async executeAddMargin(ctx: any, tradeId: string, amount: string) {
+    try {
+      console.log(`🔍 [EXECUTE_ADD_MARGIN] Executing add margin for trade ID: ${tradeId}, amount: ${amount}`);
+
+      // Get the position to find market details
+      const userAddress = getAptosAddress();
+      const markets = await this.getAvailableMarkets();
+
+      const allPositions = [];
+      for (const market of markets) {
+        try {
+          const positionsResult = await this.kanaLabsPerps.getPositions(userAddress, market.market_id);
+          if (positionsResult.success && positionsResult.data.length > 0) {
+            const positionsWithMarket = positionsResult.data.map(pos => ({ ...pos, market_name: market.base_name }));
+            allPositions.push(...positionsWithMarket);
+          }
+        } catch (error) {
+          console.error(`Error fetching positions for market ${market.market_id}:`, error);
+        }
+      }
+
+      const position = allPositions.find(p => p.trade_id === tradeId);
+
+      if (!position) {
+        ctx.reply("❌ Position not found. It may have been closed.", {
+          reply_markup: new InlineKeyboard().text("🔙 Back to Positions", "positions")
+        });
+        return;
+      }
+
+      // Show processing message
+      await ctx.reply("🔄 Adding margin... Please wait.");
+
+      // Call the Kana Labs addMargin API
+      console.log(`🔍 [EXECUTE_ADD_MARGIN] API Call params:`, {
+        marketId: position.market_id,
+        tradeSide: position.trade_side,
+        amount: amount
+      });
+
+      const result = await this.kanaLabsPerps.addMargin({
+        marketId: position.market_id,
+        tradeSide: position.trade_side,
+        amount: amount
+      });
+
+      console.log(`🔍 [EXECUTE_ADD_MARGIN] API Response:`, result);
+
+      if (result.success) {
+        // The API returns a transaction payload that needs to be submitted to the blockchain
+        const payloadData = result.data;
+
+        console.log(`🔍 [EXECUTE_ADD_MARGIN] Building transaction with payload:`, payloadData);
+
+        // Build the transaction
+        const transactionPayload = await this.aptos.transaction.build.simple({
+          sender: this.aptosAccount.accountAddress,
+          data: {
+            function: payloadData.function as `${string}::${string}::${string}`,
+            functionArguments: payloadData.functionArguments,
+            typeArguments: payloadData.typeArguments
+          }
+        });
+
+        console.log(`🔍 [EXECUTE_ADD_MARGIN] Transaction built, signing and submitting...`);
+
+        // Sign and submit the transaction
+        const committedTxn = await this.aptos.transaction.signAndSubmitTransaction({
+          transaction: transactionPayload,
+          signer: this.aptosAccount,
+        });
+
+        console.log(`🔍 [EXECUTE_ADD_MARGIN] Transaction submitted:`, committedTxn);
+
+        // Wait for transaction confirmation
+        await this.aptos.waitForTransaction({
+          transactionHash: committedTxn.hash,
+        });
+
+        console.log(`🔍 [EXECUTE_ADD_MARGIN] Transaction confirmed!`);
+
+        const marketName = position.market_name || `Market ${position.market_id}`;
+        const side = position.trade_side ? "LONG" : "SHORT";
+        const sideEmoji = position.trade_side ? "🟢" : "🔴";
+
+        let message = `✅ *Margin Added Successfully*\n\n`;
+        message += `${sideEmoji} *${marketName}* ${side}\n`;
+        message += `Amount Added: ${this.formatDollar(amount)}\n\n`;
+        message += `Transaction Hash: \`${committedTxn.hash}\`\n\n`;
+        message += `Your position's margin has been increased by ${this.formatDollar(amount)}.`;
+
+        const keyboard = new InlineKeyboard()
+          .text("🔙 Back to Position", `position_details_${tradeId}`)
+          .text("🔙 Back to Positions", "positions");
+
+        ctx.reply(message, {
+          reply_markup: keyboard,
+          parse_mode: "Markdown"
+        });
+      } else {
+        throw new Error(result.message);
+      }
+
+    } catch (error) {
+      console.error("Error executing add margin:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Error adding margin: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Position", `position_details_${tradeId}`)
+      });
+    }
+  }
+
+  private formatDollar(value: string | number | undefined, fallback: string = "N/A"): string {
+    if (value === undefined || value === null || value === "") {
+      return fallback;
+    }
+    const numValue = typeof value === "string" ? parseFloat(value) : value;
+    if (isNaN(numValue)) {
+      return fallback;
+    }
+    return `$${numValue.toFixed(2)}`;
   }
 
   private async showAssetOverview(ctx: any, index: number) {
@@ -1520,8 +2328,8 @@ export class Bot {
       }
 
       const keyboard = new InlineKeyboard()
-        .text("🟢 Long (Buy)", `order_type_${marketId}_long`)
-        .text("🔴 Short (Sell)", `order_type_${marketId}_short`)
+        .text("🟢 Long (Buy)", `order_side_${marketId}_long`)
+        .text("🔴 Short (Sell)", `order_side_${marketId}_short`)
         .row()
         .text("📈 View Chart", `chart_${marketId}`)
         .text("📊 Order Book", `orderbook_${marketId}`)
@@ -1673,7 +2481,7 @@ export class Bot {
     }
   }
 
-  private async showOrderSizeInput(ctx: any, marketId: string, orderSide: string) {
+  private async showOrderSizeInput(ctx: any, marketId: string, orderSide: string, leverage: string, orderType: string) {
     try {
       // Get market info
       const market = findMarketById(marketId);
@@ -1684,12 +2492,20 @@ export class Bot {
 
       const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
       const sideText = orderSide === 'long' ? 'Long (Buy)' : 'Short (Sell)';
+      const orderTypeEmoji = orderType === 'market' ? '⚡' : '📊';
+      const orderTypeText = orderType === 'market' ? 'Market Order' : 'Limit Order';
+
+      // Get minimum order size based on asset
+      const minSize = this.getMinimumOrderSize(market.asset);
+      const minSizeText = this.getMinimumOrderSizeText(market.asset);
 
       let message = `🎯 *Create Order - ${market.asset}*\n\n`;
-      message += `Market: ${market.asset}\n`;
-      message += `Side: ${sideEmoji} ${sideText}\n\n`;
-      message += `Enter order size (amount in USDT):\n`;
-      message += `Example: 100 (for $100 USDT)`;
+      message += `Side: ${sideEmoji} ${sideText}\n`;
+      message += `Leverage: ${leverage}x\n`;
+      message += `Type: ${orderTypeEmoji} ${orderTypeText}\n\n`;
+      message += `Enter order size:\n`;
+      message += `Minimum: ${minSizeText}\n`;
+      message += `Example: ${minSize} (for ${minSizeText})`;
 
       const keyboard = new InlineKeyboard()
         .text("❌ Cancel", `select_market_${marketId}`);
@@ -1705,32 +2521,209 @@ export class Bot {
         this.pendingTransfers.set(userId, {
           assetIndex: -1,
           step: 'order_size_input',
-          orderData: { marketId, orderSide, market }
+          orderData: { marketId, orderSide, leverage, orderType, market } as any
         });
-          }
-        } catch (error) {
+      }
+    } catch (error) {
       console.error("Error showing order size input:", error);
       ctx.reply("❌ Error loading order form. Please try again.", {
-        reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "create_order")
+        reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "markets")
       });
     }
   }
 
-  private async showOrderConfirmation(ctx: any, marketId: string, orderSide: string, market: any, size: number) {
+  private async showCustomLeverageInput(ctx: any, marketId: string, orderSide: string) {
+    try {
+      const market = findMarketById(marketId);
+      if (!market) {
+        ctx.reply("❌ Market not found.");
+        return;
+      }
+
+      const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
+      const sideText = orderSide === 'long' ? 'Long (Buy)' : 'Short (Sell)';
+
+      let message = `📝 *Create Order - ${market.asset}*\n\n`;
+      message += `Side: ${sideEmoji} ${sideText}\n\n`;
+      message += `Enter custom leverage (1-20x):\n`;
+      message += `Example: 15 (for 15x leverage)`;
+
+      const keyboard = new InlineKeyboard()
+        .text("❌ Cancel", `select_market_${marketId}`);
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+
+      // Store the order context for this user
+      const userId = ctx.from?.id;
+      if (userId) {
+        this.pendingTransfers.set(userId, {
+          assetIndex: -1,
+          step: 'custom_leverage_input',
+          orderData: { marketId, orderSide, market } as any
+        });
+      }
+    } catch (error) {
+      console.error("Error showing custom leverage input:", error);
+      ctx.reply("❌ Error loading leverage input. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "markets")
+      });
+    }
+  }
+
+  private getMinimumOrderSize(asset: string): number {
+    switch (asset) {
+      case 'APT-USD':
+        return 0.5;
+      case 'BTC-USD':
+        return 0.0001;
+      case 'ETH-USD':
+        return 0.001;
+      case 'SOL-USD':
+        return 0.05;
+      default:
+        return 0.5; // Default to APT minimum
+    }
+  }
+
+  private getMinimumOrderSizeText(asset: string): string {
+    switch (asset) {
+      case 'APT-USD':
+        return '0.5 APT';
+      case 'BTC-USD':
+        return '0.0001 BTC';
+      case 'ETH-USD':
+        return '0.001 ETH';
+      case 'SOL-USD':
+        return '0.05 SOL';
+      default:
+        return '0.5 APT'; // Default to APT minimum
+    }
+  }
+
+  private async showOrderSideSelection(ctx: any, marketId: string) {
+    try {
+      const market = findMarketById(marketId);
+      if (!market) {
+        ctx.reply("❌ Market not found.");
+        return;
+      }
+
+      let message = `📝 *Create Order - ${market.asset}*\n\n`;
+      message += `Select order side:\n\n`;
+
+      const keyboard = new InlineKeyboard()
+        .text("🟢 Long (Buy)", `order_side_${marketId}_long`)
+        .text("🔴 Short (Sell)", `order_side_${marketId}_short`)
+        .row()
+        .text("🔙 Back to Market", `select_market_${marketId}`);
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      console.error("Error showing order side selection:", error);
+      ctx.reply("❌ Error loading order form. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "markets")
+      });
+    }
+  }
+
+  private async showLeverageSelection(ctx: any, marketId: string, orderSide: string) {
+    try {
+      const market = findMarketById(marketId);
+      if (!market) {
+        ctx.reply("❌ Market not found.");
+        return;
+      }
+
+      const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
+      const sideText = orderSide === 'long' ? 'Long (Buy)' : 'Short (Sell)';
+
+      let message = `📝 *Create Order - ${market.asset}*\n\n`;
+      message += `Side: ${sideEmoji} ${sideText}\n\n`;
+      message += `Select leverage:\n\n`;
+
+      const keyboard = new InlineKeyboard()
+        .text("2x", `leverage_${marketId}_${orderSide}_2`)
+        .text("5x", `leverage_${marketId}_${orderSide}_5`)
+        .text("10x", `leverage_${marketId}_${orderSide}_10`)
+        .row()
+        .text("Custom (1-20x)", `leverage_custom_${marketId}_${orderSide}`)
+        .row()
+        .text("🔙 Back", `select_market_${marketId}`);
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      console.error("Error showing leverage selection:", error);
+      ctx.reply("❌ Error loading leverage selection. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "markets")
+      });
+    }
+  }
+
+  private async showOrderTypeSelection(ctx: any, marketId: string, orderSide: string, leverage: string) {
+    try {
+      const market = findMarketById(marketId);
+      if (!market) {
+        ctx.reply("❌ Market not found.");
+        return;
+      }
+
+      const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
+      const sideText = orderSide === 'long' ? 'Long (Buy)' : 'Short (Sell)';
+
+      let message = `📝 *Create Order - ${market.asset}*\n\n`;
+      message += `Side: ${sideEmoji} ${sideText}\n`;
+      message += `Leverage: ${leverage}x\n\n`;
+      message += `Select order type:\n\n`;
+
+      const keyboard = new InlineKeyboard()
+        .text("⚡ Market Order", `order_type_${marketId}_${orderSide}_${leverage}_market`)
+        .text("📊 Limit Order", `order_type_${marketId}_${orderSide}_${leverage}_limit`)
+        .row()
+        .text("🔙 Back", `select_market_${marketId}`);
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      console.error("Error showing order type selection:", error);
+      ctx.reply("❌ Error loading order type selection. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "markets")
+      });
+    }
+  }
+
+  private async showOrderConfirmation(ctx: any, marketId: string, orderSide: string, leverage: string, orderType: string, market: any, size: number) {
     try {
       const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
       const sideText = orderSide === 'long' ? 'Long (Buy)' : 'Short (Sell)';
+      const orderTypeEmoji = orderType === 'market' ? '⚡' : '📊';
+      const orderTypeText = orderType === 'market' ? 'Market Order' : 'Limit Order';
 
       let message = `🎯 *Order Confirmation*\n\n`;
       message += `Market: ${market.asset}\n`;
       message += `Side: ${sideEmoji} ${sideText}\n`;
-      message += `Size: $${size} USDT\n`;
-      message += `Type: Market Order\n`;
-      message += `Leverage: 1x (default)\n\n`;
-      message += `⚠️ *This will place a market order immediately!*`;
+      message += `Size: ${size} ${this.getAssetSymbol(market.asset)}\n`;
+      message += `Type: ${orderTypeEmoji} ${orderTypeText}\n`;
+      message += `Leverage: ${leverage}x\n\n`;
+
+      if (orderType === 'market') {
+        message += `⚠️ *This will place a market order immediately!*`;
+      } else {
+        message += `⚠️ *This will place a limit order (price required)*`;
+      }
 
       const keyboard = new InlineKeyboard()
-        .text("✅ Confirm Order", `confirm_order_${marketId}_${orderSide}_${size}`)
+        .text("✅ Confirm Order", `confirm_order_${marketId}_${orderSide}_${leverage}_${orderType}_${size}`)
         .text("❌ Cancel", `select_market_${marketId}`);
 
       ctx.reply(message, {
@@ -1743,7 +2736,22 @@ export class Bot {
     }
   }
 
-  private async executeOrder(ctx: any, marketId: string, orderSide: string, size: number) {
+  private getAssetSymbol(asset: string): string {
+    switch (asset) {
+      case 'APT-USD':
+        return 'APT';
+      case 'BTC-USD':
+        return 'BTC';
+      case 'ETH-USD':
+        return 'ETH';
+      case 'SOL-USD':
+        return 'SOL';
+      default:
+        return 'USDT';
+    }
+  }
+
+  private async executeOrder(ctx: any, marketId: string, orderSide: string, leverage: string, orderType: string, size: number) {
     try {
       // Show processing message
       await ctx.reply("🔄 Placing order... Please wait.");
@@ -1755,44 +2763,103 @@ export class Bot {
         return;
       }
 
-      // Place order using Kana Labs API
+      // For now, we'll only handle market orders
+      // TODO: Implement limit orders with price input
+      if (orderType === 'limit') {
+        ctx.reply("❌ Limit orders are not yet implemented. Please use market orders for now.");
+        return;
+      }
+
+      // Get transaction payload from Kana Labs API
       const orderResult = await this.kanaLabsPerps.placeMarketOrder({
         marketId: marketId,
-        side: orderSide === 'long', // true for long, false for short
+        tradeSide: orderSide === 'long', // true for long, false for short
+        direction: false, // false to open a position
         size: size.toString(),
+        leverage: parseInt(leverage),
         orderType: 'market'
       });
 
-      // Clear any pending order data
-      const userId = ctx.from?.id;
-      if (userId) {
-        this.pendingTransfers.delete(userId);
-      }
+      if (orderResult.success && orderResult.data) {
+        try {
+          // Build and submit transaction to Aptos
+          const payloadData = orderResult.data;
+          console.log(`🔍 [EXECUTE_ORDER] Transaction payload:`, payloadData);
 
-      if (orderResult.success) {
-        const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
-        const sideText = orderSide === 'long' ? 'Long' : 'Short';
+          // Map OrderPayload to Aptos SDK format
+          const aptosPayload = {
+            function: payloadData.function as `${string}::${string}::${string}`,
+            typeArguments: payloadData.typeArguments || [],
+            arguments: payloadData.functionArguments || []
+          };
 
-        const message = `✅ *Order Placed Successfully!*\n\n` +
-          `Market: ${market.asset}\n` +
-          `Side: ${sideEmoji} ${sideText}\n` +
-          `Size: $${size} USDT\n` +
-          `Type: Market Order\n\n` +
-          `Your order has been submitted to the market.`;
+          const transactionPayload = await this.aptos.transaction.build.simple({
+            sender: this.APTOS_ADDRESS,
+            data: {
+              function: aptosPayload.function,
+              typeArguments: aptosPayload.typeArguments,
+              functionArguments: aptosPayload.arguments
+            }
+          });
 
-        const keyboard = new InlineKeyboard()
-          .text("📊 View Positions", "positions")
-          .text("📋 View Orders", "open_orders")
-          .row()
-          .text("🔙 Back to Home", "start");
+          const committedTxn = await this.aptos.transaction.signAndSubmitTransaction({
+            transaction: transactionPayload,
+            signer: this.aptosAccount,
+          });
 
-        ctx.reply(message, {
-          parse_mode: "Markdown",
-          reply_markup: keyboard
-        });
-            } else {
+          console.log(`🔍 [EXECUTE_ORDER] Transaction submitted: ${committedTxn.hash}`);
+
+          // Wait for transaction confirmation
+          const response = await this.aptos.waitForTransaction({
+            transactionHash: committedTxn.hash,
+          });
+
+          if (response.success) {
+            // Clear any pending order data
+            const userId = ctx.from?.id;
+            if (userId) {
+              this.pendingTransfers.delete(userId);
+            }
+
+            const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
+            const sideText = orderSide === 'long' ? 'Long' : 'Short';
+            const orderTypeEmoji = orderType === 'market' ? '⚡' : '📊';
+            const orderTypeText = orderType === 'market' ? 'Market Order' : 'Limit Order';
+
+            const message = `✅ *Order Placed Successfully!*\n\n` +
+              `Market: ${market.asset}\n` +
+              `Side: ${sideEmoji} ${sideText}\n` +
+              `Size: ${size} ${this.getAssetSymbol(market.asset)}\n` +
+              `Type: ${orderTypeEmoji} ${orderTypeText}\n` +
+              `Leverage: ${leverage}x\n\n` +
+              `Transaction: \`${committedTxn.hash}\`\n` +
+              `Your order has been submitted to the market.`;
+
+            const keyboard = new InlineKeyboard()
+              .text("📊 View Positions", "positions")
+              .text("📋 View Orders", "open_orders")
+              .row()
+              .text("🔙 Back to Home", "start");
+
+            ctx.reply(message, {
+              parse_mode: "Markdown",
+              reply_markup: keyboard
+            });
+          } else {
+            ctx.reply(`❌ Transaction failed: ${response.success}`, {
+              reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "markets")
+            });
+          }
+        } catch (error) {
+          console.error("Error executing order transaction:", error);
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          ctx.reply(`❌ Error executing order: ${errorMessage}`, {
+            reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "markets")
+          });
+        }
+      } else {
         ctx.reply(`❌ Order failed: ${orderResult.message || 'Unknown error'}`, {
-          reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "create_order")
+          reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "markets")
         });
       }
 
@@ -2405,8 +3472,6 @@ export class Bot {
       const userAddress = getAptosAddress();
       console.log(`🔍 [POSITIONS] Starting positions fetch for address: ${userAddress}`);
 
-      // Show loading message
-      await ctx.reply("🔄 Loading your positions...");
 
       // Get all available markets first
       const markets = await this.getAvailableMarkets();
@@ -2453,39 +3518,41 @@ export class Bot {
         return;
       }
 
-      // Format positions message
+      // Format positions message with buttons
       let message = "📈 *Your Positions*\n\n";
 
-      for (const position of allPositions) {
+      if (allPositions.length === 0) {
+        message += "No open positions found.";
+      } else {
+        message += `Found ${allPositions.length} position${allPositions.length === 1 ? '' : 's'}. Click on a position to view details and manage it.`;
+      }
+
+      const keyboard = new InlineKeyboard();
+
+      // Add position buttons
+      for (let i = 0; i < allPositions.length; i++) {
+        const position = allPositions[i];
+        if (!position) continue;
+
         const side = position.trade_side ? "LONG" : "SHORT";
         const sideEmoji = position.trade_side ? "🟢" : "🔴";
         const pnl = parseFloat(position.pnl || "0");
         const pnlEmoji = pnl >= 0 ? "📈" : "📉";
         const pnlSign = pnl >= 0 ? "+" : "";
 
-        message += `${sideEmoji} *${position.market_name}* ${side}\n`;
-        message += `   Size: ${position.size} | Available: ${position.available_order_size || position.size}\n`;
-        message += `   Entry: $${position.entry_price} | Current: $${position.price || 'N/A'}\n`;
-        message += `   Value: $${position.value} | Margin: $${position.margin}\n`;
-        message += `   PnL: ${pnlEmoji} ${pnlSign}$${pnl.toFixed(2)}\n`;
+        // Calculate PnL percentage
+        const entryPrice = parseFloat(position.entry_price);
+        const currentPrice = parseFloat(position.price || position.entry_price);
+        const pnlPercentage = entryPrice > 0 ? ((currentPrice - entryPrice) / entryPrice * 100) : 0;
 
-        // Show Take Profit and Stop Loss if set
-        if (position.tp && position.tp !== "0") {
-          message += `   Take Profit: $${position.tp}\n`;
-        }
-        if (position.sl && position.sl !== "0") {
-          message += `   Stop Loss: $${position.sl}\n`;
-        }
-        if (position.liq_price && position.liq_price !== "0") {
-          message += `   Liq Price: $${position.liq_price}\n`;
-        }
-        if (position.trade_id) {
-          message += `   Trade ID: \`${position.trade_id}\`\n`;
-        }
-        message += "\n";
+        const marketName = position.market_name || `Market ${position.market_id}`;
+        const buttonText = `${sideEmoji} ${marketName} ${side}\nSize: ${position.size} | PnL: ${pnlEmoji} ${pnlSign}${pnlPercentage.toFixed(2)}%`;
+        keyboard.text(buttonText, `position_details_${position.trade_id}`);
+        keyboard.row();
       }
 
-      const keyboard = new InlineKeyboard()
+      // Add action buttons
+      keyboard
         .text("🔄 Refresh", "positions")
         .text("📊 Open Orders", "open_orders")
         .row()
@@ -2498,6 +3565,621 @@ export class Bot {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       ctx.reply(`❌ Error loading positions: ${errorMessage}`, {
         reply_markup: new InlineKeyboard().text("🔙 Back to Home", "start")
+      });
+    }
+  }
+
+  private async showPositionDetails(ctx: any, tradeId: string) {
+    try {
+      console.log(`🔍 [POSITION_DETAILS] Fetching details for trade ID: ${tradeId}`);
+
+      // Get all positions to find the specific one
+      const userAddress = getAptosAddress();
+
+      // Get all available markets first to add market names
+      const markets = await this.getAvailableMarkets();
+
+      // Get positions for all markets and add market names
+      const allPositions = [];
+      for (const market of markets) {
+        try {
+          const positionsResult = await this.kanaLabsPerps.getPositions(userAddress, market.market_id);
+          if (positionsResult.success && positionsResult.data.length > 0) {
+            const positionsWithMarket = positionsResult.data.map(pos => ({ ...pos, market_name: market.base_name }));
+            allPositions.push(...positionsWithMarket);
+          }
+        } catch (error) {
+          console.error(`Error fetching positions for market ${market.market_id}:`, error);
+        }
+      }
+
+      const position = allPositions.find(p => p.trade_id === tradeId);
+
+      if (!position) {
+        ctx.reply("❌ Position not found. It may have been closed.", {
+          reply_markup: new InlineKeyboard().text("🔙 Back to Positions", "positions")
+        });
+        return;
+      }
+
+      // Debug logging
+      console.log(`🔍 [POSITION_DETAILS] Found position:`, {
+        trade_id: position.trade_id,
+        market_id: position.market_id,
+        market_name: position.market_name,
+        has_market_name: !!position.market_name,
+        tp: position.tp,
+        sl: position.sl,
+        liq_price: position.liq_price
+      });
+
+      // Format detailed position information
+      const side = position.trade_side ? "LONG" : "SHORT";
+      const sideEmoji = position.trade_side ? "🟢" : "🔴";
+      const pnl = parseFloat(position.pnl || "0");
+      const pnlEmoji = pnl >= 0 ? "📈" : "📉";
+      const pnlSign = pnl >= 0 ? "+" : "";
+
+      let message = `📈 *Position Details*\n\n`;
+      const marketName = position.market_name || `Market ${position.market_id}`;
+      message += `${sideEmoji} *${marketName}* ${side}\n\n`;
+      message += `**Position Info:**\n`;
+      message += `   Size: ${position.size} | Available: ${position.available_order_size || position.size}\n`;
+      message += `   Entry: ${this.formatDollar(position.entry_price)} | Current: ${this.formatDollar(position.price)}\n`;
+      message += `   Value: ${this.formatDollar(position.value)} | Margin: ${this.formatDollar(position.margin)}\n`;
+      message += `   Leverage: ${position.leverage}x\n`;
+      message += `   PnL: ${pnlEmoji} ${pnlSign}${this.formatDollar(pnl)}\n\n`;
+
+      message += `**Risk Management:**\n`;
+      if (position.tp && position.tp !== "0") {
+        message += `   Take Profit: ${this.formatDollar(position.tp)}\n`;
+      } else {
+        message += `   Take Profit: Not set\n`;
+      }
+      if (position.sl && position.sl !== "0") {
+        message += `   Stop Loss: ${this.formatDollar(position.sl)}\n`;
+      } else {
+        message += `   Stop Loss: Not set\n`;
+      }
+      if (position.liq_price && position.liq_price !== "0") {
+        message += `   Liq Price: ${this.formatDollar(position.liq_price)}\n`;
+      }
+      message += `\n`;
+
+      message += `**Reference:**\n`;
+      message += `   Trade ID: \`${position.trade_id}\`\n`;
+      message += `   Market ID: \`${position.market_id}\`\n`;
+
+      // Create action buttons
+      const keyboard = new InlineKeyboard();
+
+      // Trading actions
+      keyboard
+        .text("🔴 Close Position", `close_position_${tradeId}`)
+        .text("💰 Add Margin", `add_margin_${tradeId}`)
+        .row();
+
+      // Risk management
+      keyboard
+        .text("🎯 Set Take Profit", `set_tp_${tradeId}`)
+        .text("🛡️ Set Stop Loss", `set_sl_${tradeId}`)
+        .row();
+
+      // Information
+      keyboard
+        .text("📊 View Orders", `position_orders_${tradeId}`)
+        .text("📈 Trade History", `position_history_${tradeId}`)
+        .row();
+
+      // Navigation
+      keyboard
+        .text("🔄 Refresh", `position_details_${tradeId}`)
+        .text("🔙 Back to Positions", "positions")
+        .row()
+        .text("🏠 Home", "start");
+
+      ctx.reply(message, {
+        reply_markup: keyboard,
+        parse_mode: "Markdown"
+      });
+
+    } catch (error) {
+      console.error("Error showing position details:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Error loading position details: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Positions", "positions")
+      });
+    }
+  }
+
+  private async closePosition(ctx: any, tradeId: string) {
+    try {
+      console.log(`🔍 [CLOSE_POSITION] Closing position for trade ID: ${tradeId}`);
+
+      // Get the position to find market details
+      const userAddress = getAptosAddress();
+      const markets = await this.getAvailableMarkets();
+
+      const allPositions = [];
+      for (const market of markets) {
+        try {
+          const positionsResult = await this.kanaLabsPerps.getPositions(userAddress, market.market_id);
+          if (positionsResult.success && positionsResult.data.length > 0) {
+            const positionsWithMarket = positionsResult.data.map(pos => ({ ...pos, market_name: market.base_name }));
+            allPositions.push(...positionsWithMarket);
+          }
+        } catch (error) {
+          console.error(`Error fetching positions for market ${market.market_id}:`, error);
+        }
+      }
+
+      const position = allPositions.find(p => p.trade_id === tradeId);
+
+      if (!position) {
+        ctx.reply("❌ Position not found. It may have been closed.", {
+          reply_markup: new InlineKeyboard().text("🔙 Back to Positions", "positions")
+        });
+        return;
+      }
+
+      const marketName = position.market_name || `Market ${position.market_id}`;
+      const side = position.trade_side ? "LONG" : "SHORT";
+      const sideEmoji = position.trade_side ? "🟢" : "🔴";
+      const currentPrice = parseFloat(position.price || position.entry_price);
+      const entryPrice = parseFloat(position.entry_price);
+      const pnl = parseFloat(position.pnl || "0");
+      const pnlEmoji = pnl >= 0 ? "📈" : "📉";
+      const pnlSign = pnl >= 0 ? "+" : "";
+
+      let message = `🔴 *Close Position*\n\n`;
+      message += `${sideEmoji} *${marketName}* ${side}\n`;
+      message += `Size: ${position.size}\n`;
+      message += `Entry Price: ${this.formatDollar(entryPrice)}\n`;
+      message += `Current Price: ${this.formatDollar(currentPrice)}\n`;
+      message += `PnL: ${pnlEmoji} ${pnlSign}${this.formatDollar(pnl)}\n\n`;
+      message += `⚠️ This will close your entire position at market price.\n`;
+      message += `Are you sure you want to close this position?`;
+
+      const keyboard = new InlineKeyboard()
+        .text("✅ Yes, Close Position", `confirm_close_${tradeId}`)
+        .text("❌ Cancel", `position_details_${tradeId}`)
+        .row();
+
+      ctx.reply(message, {
+        reply_markup: keyboard,
+        parse_mode: "Markdown"
+      });
+
+    } catch (error) {
+      console.error("Error closing position:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Error closing position: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Position", `position_details_${tradeId}`)
+      });
+    }
+  }
+
+  private async addMarginPrompt(ctx: any, tradeId: string) {
+    try {
+      console.log(`🔍 [ADD_MARGIN] Adding margin for trade ID: ${tradeId}`);
+
+      // Get the position to find market details
+      const userAddress = getAptosAddress();
+      const markets = await this.getAvailableMarkets();
+
+      const allPositions = [];
+      for (const market of markets) {
+        try {
+          const positionsResult = await this.kanaLabsPerps.getPositions(userAddress, market.market_id);
+          if (positionsResult.success && positionsResult.data.length > 0) {
+            const positionsWithMarket = positionsResult.data.map(pos => ({ ...pos, market_name: market.base_name }));
+            allPositions.push(...positionsWithMarket);
+          }
+        } catch (error) {
+          console.error(`Error fetching positions for market ${market.market_id}:`, error);
+        }
+      }
+
+      const position = allPositions.find(p => p.trade_id === tradeId);
+
+      if (!position) {
+        ctx.reply("❌ Position not found. It may have been closed.", {
+          reply_markup: new InlineKeyboard().text("🔙 Back to Positions", "positions")
+        });
+        return;
+      }
+
+      const marketName = position.market_name || `Market ${position.market_id}`;
+      const side = position.trade_side ? "LONG" : "SHORT";
+      const sideEmoji = position.trade_side ? "🟢" : "🔴";
+      const currentMargin = parseFloat(position.margin);
+      const liquidationPrice = parseFloat(position.liq_price);
+
+      let message = `💰 *Add Margin*\n\n`;
+      message += `${sideEmoji} *${marketName}* ${side}\n`;
+      message += `Current Margin: ${this.formatDollar(currentMargin)}\n`;
+      message += `Liquidation Price: ${this.formatDollar(liquidationPrice)}\n\n`;
+      message += `Enter the amount of margin to add:\n`;
+      message += `• This will increase your position's margin\n`;
+      message += `• Higher margin = lower liquidation price\n`;
+      message += `• Minimum amount: $1.00\n`;
+      message += `• Example: 10.50 (for $10.50)`;
+
+      // Store the trade ID for the response handler
+      const userId = ctx.from?.id;
+      if (userId) {
+        this.pendingTransfers.set(userId, {
+          type: 'add_margin',
+          tradeId: tradeId,
+          marketId: position.market_id,
+          tradeSide: position.trade_side
+        });
+      }
+
+      const keyboard = new InlineKeyboard()
+        .text("❌ Cancel", `position_details_${tradeId}`);
+
+      ctx.reply(message, {
+        reply_markup: keyboard,
+        parse_mode: "Markdown"
+      });
+
+    } catch (error) {
+      console.error("Error adding margin:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Error adding margin: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Position", `position_details_${tradeId}`)
+      });
+    }
+  }
+
+  private async setTakeProfitPrompt(ctx: any, tradeId: string) {
+    try {
+      console.log(`🔍 [SET_TP] Setting take profit for trade ID: ${tradeId}`);
+
+      // Get the position to find market details
+      const userAddress = getAptosAddress();
+      const markets = await this.getAvailableMarkets();
+
+      const allPositions = [];
+      for (const market of markets) {
+        try {
+          const positionsResult = await this.kanaLabsPerps.getPositions(userAddress, market.market_id);
+          if (positionsResult.success && positionsResult.data.length > 0) {
+            const positionsWithMarket = positionsResult.data.map(pos => ({ ...pos, market_name: market.base_name }));
+            allPositions.push(...positionsWithMarket);
+          }
+        } catch (error) {
+          console.error(`Error fetching positions for market ${market.market_id}:`, error);
+        }
+      }
+
+      const position = allPositions.find(p => p.trade_id === tradeId);
+
+      if (!position) {
+        ctx.reply("❌ Position not found. It may have been closed.", {
+          reply_markup: new InlineKeyboard().text("🔙 Back to Positions", "positions")
+        });
+        return;
+      }
+
+      const marketName = position.market_name || `Market ${position.market_id}`;
+      const side = position.trade_side ? "LONG" : "SHORT";
+      const sideEmoji = position.trade_side ? "🟢" : "🔴";
+      const currentPrice = parseFloat(position.price || position.entry_price);
+      const entryPrice = parseFloat(position.entry_price);
+
+      let message = `🎯 *Set Take Profit*\n\n`;
+      message += `${sideEmoji} *${marketName}* ${side}\n`;
+      message += `Entry Price: ${this.formatDollar(entryPrice)}\n`;
+      message += `Current Price: ${this.formatDollar(currentPrice)}\n\n`;
+
+      if (position.tp && position.tp !== "0") {
+        message += `Current Take Profit: ${this.formatDollar(position.tp)}\n\n`;
+      }
+
+      message += `Enter your take profit price:\n`;
+      message += `• For LONG: Enter price above current price (e.g., $${(currentPrice * 1.05).toFixed(2)})\n`;
+      message += `• For SHORT: Enter price below current price (e.g., $${(currentPrice * 0.95).toFixed(2)})\n\n`;
+      message += `Example: ${side === "LONG" ? (currentPrice * 1.1).toFixed(2) : (currentPrice * 0.9).toFixed(2)}`;
+
+      // Store the trade ID for the response handler
+      const userId = ctx.from?.id;
+      if (userId) {
+        this.pendingTransfers.set(userId, {
+          type: 'set_take_profit',
+          tradeId: tradeId,
+          marketId: position.market_id,
+          tradeSide: position.trade_side
+        });
+      }
+
+      const keyboard = new InlineKeyboard()
+        .text("❌ Cancel", `position_details_${tradeId}`);
+
+      ctx.reply(message, {
+        reply_markup: keyboard,
+        parse_mode: "Markdown"
+      });
+
+    } catch (error) {
+      console.error("Error setting take profit:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Error setting take profit: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Position", `position_details_${tradeId}`)
+      });
+    }
+  }
+
+  private async setStopLossPrompt(ctx: any, tradeId: string) {
+    try {
+      console.log(`🔍 [SET_SL] Setting stop loss for trade ID: ${tradeId}`);
+
+      // Get the position to find market details
+      const userAddress = getAptosAddress();
+      const markets = await this.getAvailableMarkets();
+
+      const allPositions = [];
+      for (const market of markets) {
+        try {
+          const positionsResult = await this.kanaLabsPerps.getPositions(userAddress, market.market_id);
+          if (positionsResult.success && positionsResult.data.length > 0) {
+            const positionsWithMarket = positionsResult.data.map(pos => ({ ...pos, market_name: market.base_name }));
+            allPositions.push(...positionsWithMarket);
+          }
+        } catch (error) {
+          console.error(`Error fetching positions for market ${market.market_id}:`, error);
+        }
+      }
+
+      const position = allPositions.find(p => p.trade_id === tradeId);
+
+      if (!position) {
+        ctx.reply("❌ Position not found. It may have been closed.", {
+          reply_markup: new InlineKeyboard().text("🔙 Back to Positions", "positions")
+        });
+        return;
+      }
+
+      const marketName = position.market_name || `Market ${position.market_id}`;
+      const side = position.trade_side ? "LONG" : "SHORT";
+      const sideEmoji = position.trade_side ? "🟢" : "🔴";
+      const currentPrice = parseFloat(position.price || position.entry_price);
+      const entryPrice = parseFloat(position.entry_price);
+
+      let message = `🛡️ *Set Stop Loss*\n\n`;
+      message += `${sideEmoji} *${marketName}* ${side}\n`;
+      message += `Entry Price: ${this.formatDollar(entryPrice)}\n`;
+      message += `Current Price: ${this.formatDollar(currentPrice)}\n`;
+      message += `Liquidation Price: ${this.formatDollar(position.liq_price)}\n\n`;
+
+      if (position.sl && position.sl !== "0") {
+        message += `Current Stop Loss: ${this.formatDollar(position.sl)}\n\n`;
+      }
+
+      message += `Enter your stop loss price:\n`;
+      message += `• For LONG: Enter price below current price (e.g., $${(currentPrice * 0.95).toFixed(2)})\n`;
+      message += `• For SHORT: Enter price above current price (e.g., $${(currentPrice * 1.05).toFixed(2)})\n\n`;
+
+      if (side === "LONG") {
+        message += `⚠️ Must be above liquidation price: ${this.formatDollar(position.liq_price)}\n`;
+      } else {
+        message += `⚠️ Must be below liquidation price: ${this.formatDollar(position.liq_price)}\n`;
+      }
+
+      message += `Example: ${side === "LONG" ? (currentPrice * 0.9).toFixed(2) : (currentPrice * 1.1).toFixed(2)}`;
+
+      // Store the trade ID for the response handler
+      const userId = ctx.from?.id;
+      if (userId) {
+        this.pendingTransfers.set(userId, {
+          type: 'set_stop_loss',
+          tradeId: tradeId,
+          marketId: position.market_id,
+          tradeSide: position.trade_side
+        });
+      }
+
+      const keyboard = new InlineKeyboard()
+        .text("❌ Cancel", `position_details_${tradeId}`);
+
+      ctx.reply(message, {
+        reply_markup: keyboard,
+        parse_mode: "Markdown"
+      });
+
+    } catch (error) {
+      console.error("Error setting stop loss:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Error setting stop loss: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Position", `position_details_${tradeId}`)
+      });
+    }
+  }
+
+  private async showPositionOrders(ctx: any, tradeId: string) {
+    try {
+      console.log(`🔍 [POSITION_ORDERS] Fetching orders for trade ID: ${tradeId}`);
+
+      // First get the position to find the market ID
+      const userAddress = getAptosAddress();
+
+      // Get all available markets first to add market names
+      const markets = await this.getAvailableMarkets();
+
+      // Get positions for all markets and add market names
+      const allPositions = [];
+      for (const market of markets) {
+        try {
+          const positionsResult = await this.kanaLabsPerps.getPositions(userAddress, market.market_id);
+          if (positionsResult.success && positionsResult.data.length > 0) {
+            const positionsWithMarket = positionsResult.data.map(pos => ({ ...pos, market_name: market.base_name }));
+            allPositions.push(...positionsWithMarket);
+          }
+        } catch (error) {
+          console.error(`Error fetching positions for market ${market.market_id}:`, error);
+        }
+      }
+
+      const position = allPositions.find(p => p.trade_id === tradeId);
+
+      if (!position) {
+        ctx.reply("❌ Position not found. It may have been closed.", {
+          reply_markup: new InlineKeyboard().text("🔙 Back to Positions", "positions")
+        });
+        return;
+      }
+
+      // Get orders for this market
+      const ordersResult = await this.kanaLabsPerps.getOpenOrders(userAddress, position.market_id);
+      if (!ordersResult.success) {
+        throw new Error(ordersResult.message);
+      }
+
+      const orders = ordersResult.data || [];
+
+      // Filter orders that might be related to this position (same trade_id)
+      const relatedOrders = orders.filter(order => order.trade_id === tradeId);
+
+      let message = `📊 *Orders for ${position.market_name}*\n\n`;
+
+      if (relatedOrders.length === 0) {
+        message += "No open orders found for this position.";
+      } else {
+        message += `Found ${relatedOrders.length} order${relatedOrders.length === 1 ? '' : 's'} for this position:\n\n`;
+
+        for (const order of relatedOrders) {
+          const orderType = this.getOrderTypeName(order.order_type);
+          const isLongOrder = [1, 3, 5, 7].includes(order.order_type);
+          const side = isLongOrder ? "LONG" : "SHORT";
+          const sideEmoji = isLongOrder ? "🟢" : "🔴";
+
+          // Calculate filled amount
+          const totalSize = parseFloat(order.total_size);
+          const remainingSize = parseFloat(order.remaining_size);
+          const filledSize = totalSize - remainingSize;
+          const filledPercentage = totalSize > 0 ? ((filledSize / totalSize) * 100).toFixed(1) : "0";
+
+          message += `${sideEmoji} *${orderType}* ${side}\n`;
+          message += `   Size: ${order.total_size} | Remaining: ${order.remaining_size}\n`;
+          message += `   Filled: ${filledSize.toFixed(4)} (${filledPercentage}%)\n`;
+          message += `   Price: $${order.price} | Value: $${order.order_value}\n`;
+          message += `   Leverage: ${order.leverage}x\n`;
+          message += `   Order ID: \`${order.order_id}\`\n`;
+          if (order.timestamp) {
+            message += `   Placed: ${new Date(order.timestamp * 1000).toLocaleString()}\n`;
+          }
+          message += "\n";
+        }
+      }
+
+      const keyboard = new InlineKeyboard()
+        .text("🔄 Refresh", `position_orders_${tradeId}`)
+        .text("🔙 Back to Position", `position_details_${tradeId}`)
+        .row()
+        .text("🔙 Back to Positions", "positions");
+
+      ctx.reply(message, {
+        reply_markup: keyboard,
+        parse_mode: "Markdown"
+      });
+
+    } catch (error) {
+      console.error("Error showing position orders:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Error loading position orders: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard()
+          .text("🔙 Back to Position", `position_details_${tradeId}`)
+          .text("🔙 Back to Positions", "positions")
+      });
+    }
+  }
+
+  private async showPositionHistory(ctx: any, tradeId: string) {
+    try {
+      console.log(`🔍 [POSITION_HISTORY] Fetching trade history for trade ID: ${tradeId}`);
+
+      // First get the position to find the market ID
+      const userAddress = getAptosAddress();
+
+      // Get all available markets first to add market names
+      const markets = await this.getAvailableMarkets();
+
+      // Get positions for all markets and add market names
+      const allPositions = [];
+      for (const market of markets) {
+        try {
+          const positionsResult = await this.kanaLabsPerps.getPositions(userAddress, market.market_id);
+          if (positionsResult.success && positionsResult.data.length > 0) {
+            const positionsWithMarket = positionsResult.data.map(pos => ({ ...pos, market_name: market.base_name }));
+            allPositions.push(...positionsWithMarket);
+          }
+        } catch (error) {
+          console.error(`Error fetching positions for market ${market.market_id}:`, error);
+        }
+      }
+
+      const position = allPositions.find(p => p.trade_id === tradeId);
+
+      if (!position) {
+        ctx.reply("❌ Position not found. It may have been closed.", {
+          reply_markup: new InlineKeyboard().text("🔙 Back to Positions", "positions")
+        });
+        return;
+      }
+
+      // Get trade history for this market
+      const tradesResult = await this.kanaLabsPerps.getAllTrades(userAddress, position.market_id);
+      if (!tradesResult.success) {
+        throw new Error(tradesResult.message);
+      }
+
+      const allTrades = tradesResult.data || [];
+
+      // Filter trades that might be related to this position (same trade_id)
+      const relatedTrades = allTrades.filter(trade => trade.trade_id === tradeId);
+
+      let message = `📈 *Trade History for ${position.market_name}*\n\n`;
+
+      if (relatedTrades.length === 0) {
+        message += "No trade history found for this position.";
+      } else {
+        message += `Found ${relatedTrades.length} trade${relatedTrades.length === 1 ? '' : 's'} for this position:\n\n`;
+
+        // Sort trades by timestamp (newest first)
+        relatedTrades.sort((a, b) => parseInt(b.timestamp) - parseInt(a.timestamp));
+
+        for (const trade of relatedTrades) {
+          const side = trade.side ? "LONG" : "SHORT";
+          const sideEmoji = trade.side ? "🟢" : "🔴";
+          const timestamp = new Date(parseInt(trade.timestamp) * 1000).toLocaleString();
+
+          message += `${sideEmoji} *${side}* Trade\n`;
+          message += `   Size: ${trade.size} | Price: $${trade.price}\n`;
+          message += `   Fee: $${trade.fee} | Trade ID: \`${trade.trade_id}\`\n`;
+          message += `   Order ID: \`${trade.order_id}\`\n`;
+          message += `   Time: ${timestamp}\n\n`;
+        }
+      }
+
+      const keyboard = new InlineKeyboard()
+        .text("🔄 Refresh", `position_history_${tradeId}`)
+        .text("🔙 Back to Position", `position_details_${tradeId}`)
+        .row()
+        .text("🔙 Back to Positions", "positions");
+
+      ctx.reply(message, {
+        reply_markup: keyboard,
+        parse_mode: "Markdown"
+      });
+
+    } catch (error) {
+      console.error("Error showing position history:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Error loading position history: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard()
+          .text("🔙 Back to Position", `position_details_${tradeId}`)
+          .text("🔙 Back to Positions", "positions")
       });
     }
   }
