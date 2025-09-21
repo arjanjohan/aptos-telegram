@@ -117,56 +117,63 @@ aptos-telegram/
 ### **Voting Settings**
 - **Voting Period**: 5 minutes (configurable)
 - **Approval Threshold**: 50% (configurable)
-- **Anonymous Voting**: Disabled (voters are tracked)
-
-## Development Status
-
-### **Phase 1: Core Trading** ✅ **COMPLETE**
-- [x] Market selection and browsing
-- [x] Order creation with leverage
-- [x] Position management
-- [x] Real-time price tracking
-- [x] PnL calculation
-
-### **Phase 2: Position Management** ✅ **COMPLETE**
-- [x] Close positions
-- [x] Add margin
-- [x] Set take profit/stop loss
-- [x] View orders and trade history
-- [x] On-chain transaction submission
-
-### **Phase 3: Group Features** 🔄 **IN PROGRESS**
-- [x] Voting infrastructure
-- [ ] Group member management
-- [ ] Admin permissions
-- [ ] Settings interface
-
-### **Phase 4: Advanced Features** ⏳ **PLANNED**
-- [ ] Limit orders
-- [ ] Order modifications
-- [ ] Advanced analytics
-- [ ] Performance tracking
 
 ## API Integration
 
-### **Kana Labs Perpetual Futures API**
-- **Base URL**: `https://perps-tradeapi.kana.trade` (mainnet)
-- **Authentication**: API key based
-- **Endpoints Used**:
-  - `/getMarkets` - Market information
-  - `/getMarketPrice` - Real-time prices
-  - `/getPositions` - User positions
-  - `/getOrders` - User orders
-  - `/placeMarketOrder` - Create market orders
-  - `/updateTakeProfit` - Set take profit
-  - `/updateStopLoss` - Set stop loss
-  - `/addMargin` - Add margin to positions
+This project uses the  following Kana Labs Perpetual Futures API endpoints:
 
+- **Core Trading Endpoints**:
+  - `/getMarketInfo` - Market information and details
+  - `/getMarketPrice` - Real-time market prices (bid/ask)
+  - `/getLastExecutionPrice` - Last execution price for markets
+  - `/placeMarketOrder` - Create market orders (GET request)
+  - `/placeLimitOrder` - Create limit orders (GET request)
+  - `/placeMultipleOrders` - Create multiple orders at once
+  - `/cancelMultipleOrders` - Cancel multiple orders
+  - `/cancelAndPlaceMultipleOrders` - Cancel and place orders atomically
+
+- **Position & Order Management**:
+  - `/getPositions` - Get user positions for a market
+  - `/getOpenOrders` - Get open orders for a market
+  - `/getOrderHistory` - Get order history for a market
+  - `/getAllTrades` - Get all trades for a market
+  - `/getFills` - Get fills for a market
+  - `/getOrderStatusByOrderId` - Get specific order status
+  - `/getAllOpenOrderIds` - Get all open order IDs
+
+- **Risk Management**:
+  - `/updateTakeProfit` - Set/update take profit for positions
+  - `/updateStopLoss` - Set/update stop loss for positions
+  - `/addMargin` - Add margin to existing positions
+
+- **Account & Balance Management**:
+  - `/getWalletAccountBalance` - Get wallet USDT balance
+  - `/getProfileBalanceSnapshot` - Get Kana Labs profile balance
+  - `/getNetProfileBalance` - Get net profile balance
+  - `/getAccountAptBalance` - Get APT balance
+  - `/getProfileAddress` - Get Kana Labs profile address
+  - `/deposit` - Deposit USDT to Kana Labs (GET request)
+  - `/withdrawMultipleMarkets` - Withdraw from Kana Labs (GET request)
 
 ## TODO
 
-This is just a proof of concept for the CTRL+MOVE hackathon. To make this project production ready, the follow features still need to be added:
-- Limit orders
-- Voting mechanics
-- Key storage (securely store key)
-- Validate telegram group members. People who join uninvited should not be able to vote
+This is a proof of concept for the CTRL+MOVE hackathon. To make this project production ready, the following features still need to be added:
+- **Group Management**:
+  - Ensure only verified members can vote
+  - Ensure members can only withdraw pro-rate to their deposits
+- **Advanced Trading**:
+   - Limit orders
+   - Order modifications
+   - partial position closes
+- **Analytics & Reporting**:
+  - Trade history
+  - performance metrics
+  - P&L reports
+- **Notification Settings**:
+  - Customizable alerts and notifications
+- **Voting Integration**:
+  - Voting system for trading actions
+  - Customize/override voting requirements per action
+  - Optional admin rights, to allow actions without voting
+- **Key management**:
+  - Store privatekey of KanaLabs account securely

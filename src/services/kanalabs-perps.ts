@@ -99,14 +99,14 @@ export class KanaLabsPerpsService {
   }
 
   /**
-   * Deposit funds to a specific market
+   * Deposit funds to Kana Labs
    */
   async deposit(params: DepositParams): Promise<ApiResponse<OrderPayload>> {
     return this.makeRequest<OrderPayload>('/deposit', params, 'GET');
   }
 
   /**
-   * Withdraw funds from a specific market
+   * Withdraw funds from Kana Labs
    */
   async withdraw(params: WithdrawParams): Promise<ApiResponse<OrderPayload>> {
     return this.makeRequest<OrderPayload>('/withdrawMultipleMarkets', params, 'GET');
@@ -138,8 +138,18 @@ export class KanaLabsPerpsService {
   /**
    * Cancel multiple orders
    */
-  async cancelMultipleOrders(orderIds: string[]): Promise<ApiResponse<OrderPayload>> {
-    return this.makeRequest<OrderPayload>('/cancelMultipleOrders', { orderIds }, 'POST');
+  async cancelMultipleOrders(params: {
+    marketId: string;
+    cancelOrderIds: string[];
+    orderSides: boolean[];
+  }): Promise<ApiResponse<OrderPayload>> {
+    // Convert arrays to comma-separated strings like the withdraw function
+    const queryParams = {
+      marketId: params.marketId,
+      orderIds: params.cancelOrderIds.join(','),
+      cancelTradeSides: params.orderSides.join(',')
+    };
+    return this.makeRequest<OrderPayload>('/cancelMultipleOrders', queryParams, 'POST');
   }
 
   /**
@@ -313,8 +323,16 @@ export class KanaLabsPerpsService {
   /**
    * Helper method to cancel a single order
    */
-  async cancelOrder(orderId: string): Promise<ApiResponse<OrderPayload>> {
-    return this.cancelMultipleOrders([orderId]);
+  async cancelOrder(params: {
+    marketId: string;
+    orderId: string;
+    orderSide: boolean;
+  }): Promise<ApiResponse<OrderPayload>> {
+    return this.cancelMultipleOrders({
+      marketId: params.marketId,
+      cancelOrderIds: [params.orderId],
+      orderSides: [params.orderSide]
+    });
   }
 
   /**

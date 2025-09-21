@@ -30,7 +30,7 @@ export class Bot {
   private APTOS_ADDRESS: string;
   private APTOS_PRIVATE_KEY: string;
   private kanaLabsPerps: KanaLabsPerpsService;
-  private pendingTransfers: Map<number, { assetIndex?: number; step?: string; type?: string; recipientAddress?: string; amount?: string; orderData?: { marketId: string; orderSide: string; market: any }; tradeId?: string; marketId?: string; tradeSide?: boolean }> = new Map();
+  private pendingTransfers: Map<number, { assetIndex?: number; step?: string; type?: string; recipientAddress?: string; amount?: string; orderData?: { marketId: string; orderSide: string; market: any; limitPrice?: number }; tradeId?: string; marketId?: string; tradeSide?: boolean; orderSide?: string; leverage?: string; currentPrice?: number }> = new Map();
   private pendingDeposits: Map<number, { step: string; amount?: string }> = new Map();
   private pendingVotes: Map<string, { pollId: string; action: string; data: any; voters: Set<number>; startTime: number }> = new Map();
 
@@ -119,6 +119,8 @@ export class Bot {
         await this.handleStopLossInput(ctx, pendingTransfer, text);
       } else if (pendingTransfer.type === 'add_margin') {
         await this.handleAddMarginInput(ctx, pendingTransfer, text);
+      } else if (pendingTransfer.type === 'limit_price_input') {
+        await this.handleLimitPriceInput(ctx, pendingTransfer, text);
         }
         return;
       }
@@ -184,6 +186,15 @@ export class Bot {
       } else if (data.startsWith("position_history_")) {
         const tradeId = data.replace("position_history_", "");
         await this.showPositionHistory(ctx, tradeId);
+      } else if (data.startsWith("order_details_")) {
+        const orderId = data.replace("order_details_", "");
+        await this.showOrderDetails(ctx, orderId);
+      } else if (data.startsWith("cancel_order_")) {
+        const orderId = data.replace("cancel_order_", "");
+        await this.cancelOrder(ctx, orderId);
+      } else if (data.startsWith("flip_to_market_")) {
+        const orderId = data.replace("flip_to_market_", "");
+        await this.flipOrderToMarket(ctx, orderId);
       } else if (data.startsWith("confirm_tp_")) {
         const parts = data.replace("confirm_tp_", "").split("_");
         const tradeId = parts[0];
@@ -282,7 +293,12 @@ export class Bot {
           const orderSide = parts[3];
           const leverage = parts[4];
           const orderType = parts[5]; // market or limit
-          await this.showOrderSizeInput(ctx, marketId, orderSide, leverage, orderType);
+
+          if (orderType === 'limit') {
+            await this.showLimitPriceInput(ctx, marketId, orderSide, leverage);
+          } else {
+            await this.showOrderSizeInput(ctx, marketId, orderSide, leverage, orderType);
+          }
         }
       } else if (data.startsWith("chart_")) {
         const parts = data.split("_");
@@ -304,7 +320,8 @@ export class Bot {
           const leverage = parts[4];
           const orderType = parts[5];
           const size = parseFloat(parts[6]);
-          await this.executeOrder(ctx, marketId, orderSide, leverage, orderType, size);
+          const limitPrice = parts.length > 7 && parts[7] ? (isNaN(parseFloat(parts[7])) ? undefined : parseFloat(parts[7])) : undefined;
+          await this.executeOrder(ctx, marketId, orderSide, leverage, orderType, size, limitPrice);
         }
       } else if (data === "confirm_deposit") {
         await this.executeDeposit(ctx);
@@ -683,7 +700,7 @@ export class Bot {
       const pendingTransfer = this.pendingTransfers.get(userId);
       if (!pendingTransfer || !pendingTransfer.orderData) return;
 
-      const { marketId, orderSide, leverage, orderType, market } = pendingTransfer.orderData as any;
+      const { marketId, orderSide, leverage, orderType, market, limitPrice } = pendingTransfer.orderData as any;
 
       // Validate minimum order size
       const minSize = this.getMinimumOrderSize(market.asset);
@@ -694,7 +711,7 @@ export class Bot {
       }
 
       // Show order confirmation
-      await this.showOrderConfirmation(ctx, marketId, orderSide, leverage, orderType, market, size);
+      await this.showOrderConfirmation(ctx, marketId, orderSide, leverage, orderType, market, size, limitPrice);
     } catch (error) {
       console.error("Error handling order size input:", error);
       ctx.reply("❌ Error processing order size. Please try again.");
@@ -750,7 +767,7 @@ export class Bot {
             const positionsWithMarket = positionsResult.data.map(pos => ({ ...pos, market_name: market.base_name }));
             allPositions.push(...positionsWithMarket);
           }
-        } catch (error) {
+          } catch (error) {
           console.error(`Error fetching positions for market ${market.market_id}:`, error);
         }
       }
@@ -825,7 +842,7 @@ export class Bot {
             const positionsWithMarket = positionsResult.data.map(pos => ({ ...pos, market_name: market.base_name }));
             allPositions.push(...positionsWithMarket);
           }
-        } catch (error) {
+    } catch (error) {
           console.error(`Error fetching positions for market ${market.market_id}:`, error);
         }
       }
@@ -854,7 +871,7 @@ export class Bot {
       } else {
         if (price <= currentPrice) {
           ctx.reply(`❌ For SHORT positions, stop loss must be above current price (${this.formatDollar(currentPrice)}). Please try again:`);
-          return;
+        return;
         }
         if (price >= liquidationPrice) {
           ctx.reply(`❌ Stop loss must be below liquidation price (${this.formatDollar(liquidationPrice)}). Please try again:`);
@@ -884,7 +901,7 @@ export class Bot {
       // Clear pending transfer
       this.pendingTransfers.delete(ctx.from?.id);
 
-          } catch (error) {
+    } catch (error) {
       console.error("Error handling stop loss input:", error);
       ctx.reply("❌ Error processing stop loss price. Please try again.");
     }
@@ -931,6 +948,39 @@ export class Bot {
     } catch (error) {
       console.error("Error handling add margin input:", error);
       ctx.reply("❌ Error processing margin amount. Please try again.");
+    }
+  }
+
+  private async handleLimitPriceInput(ctx: any, pendingTransfer: any, text: string) {
+    try {
+      const price = parseFloat(text);
+
+      if (isNaN(price) || price <= 0) {
+        ctx.reply("❌ Invalid price. Please enter a positive number:");
+        return;
+      }
+
+      const { marketId, orderSide, leverage, currentPrice } = pendingTransfer;
+
+      // Validate price based on order side
+      if (orderSide === 'long' && price <= currentPrice) {
+        ctx.reply(`❌ For LONG orders, limit price must be above current price ($${currentPrice.toFixed(3)}). Please try again:`);
+        return;
+      }
+
+      if (orderSide === 'short' && price >= currentPrice) {
+        ctx.reply(`❌ For SHORT orders, limit price must be below current price ($${currentPrice.toFixed(3)}). Please try again:`);
+        return;
+      }
+
+      // Clear the pending transfer
+      this.pendingTransfers.delete(ctx.from.id);
+
+      // Proceed to order size input with the limit price
+      await this.showOrderSizeInput(ctx, marketId, orderSide, leverage, 'limit', price);
+    } catch (error) {
+      console.error("Error handling limit price input:", error);
+      ctx.reply("❌ Error processing limit price. Please try again.");
     }
   }
 
@@ -1037,7 +1087,7 @@ export class Bot {
         throw new Error(result.message);
       }
 
-          } catch (error) {
+    } catch (error) {
       console.error("Error executing take profit:", error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       ctx.reply(`❌ Error setting take profit: ${errorMessage}`, {
@@ -1137,19 +1187,19 @@ export class Bot {
         message += `Transaction Hash: \`${committedTxn.hash}\`\n\n`;
         message += `Your stop loss order has been placed and will execute when the price reaches ${this.formatDollar(price)}.`;
 
-        const keyboard = new InlineKeyboard()
+      const keyboard = new InlineKeyboard()
           .text("🔙 Back to Position", `position_details_${tradeId}`)
           .text("🔙 Back to Positions", "positions");
 
-        ctx.reply(message, {
+      ctx.reply(message, {
           reply_markup: keyboard,
           parse_mode: "Markdown"
-        });
+      });
       } else {
         throw new Error(result.message);
       }
 
-    } catch (error) {
+        } catch (error) {
       console.error("Error executing stop loss:", error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       ctx.reply(`❌ Error setting stop loss: ${errorMessage}`, {
@@ -1246,7 +1296,7 @@ export class Bot {
         console.log(`🔍 [EXECUTE_CLOSE] Transaction submitted:`, committedTxn.hash);
 
         // Wait for transaction confirmation
-        await this.aptos.waitForTransaction({
+      await this.aptos.waitForTransaction({
           transactionHash: committedTxn.hash,
         });
 
@@ -1359,7 +1409,7 @@ export class Bot {
         console.log(`🔍 [EXECUTE_ADD_MARGIN] Transaction submitted:`, committedTxn);
 
         // Wait for transaction confirmation
-        await this.aptos.waitForTransaction({
+      await this.aptos.waitForTransaction({
           transactionHash: committedTxn.hash,
         });
 
@@ -1668,7 +1718,77 @@ export class Bot {
     }
   }
 
-  private async showOrderSizeInput(ctx: any, marketId: string, orderSide: string, leverage: string, orderType: string) {
+  private async showLimitPriceInput(ctx: any, marketId: string, orderSide: string, leverage: string) {
+    try {
+      const market = findMarketById(marketId);
+      if (!market) {
+        ctx.reply("❌ Market not found.");
+        return;
+      }
+
+      // Get current market price for reference
+      let currentPrice = "N/A";
+      try {
+        const priceResult = await this.kanaLabsPerps.getMarketPrice(marketId);
+        if (priceResult.success && priceResult.data) {
+          if (priceResult.data.bestAskPrice && priceResult.data.bestBidPrice) {
+            const midPrice = (priceResult.data.bestAskPrice + priceResult.data.bestBidPrice) / 2;
+            currentPrice = midPrice.toFixed(3);
+          } else if (priceResult.data.price) {
+            currentPrice = parseFloat(priceResult.data.price).toFixed(3);
+          }
+        }
+      } catch (error) {
+        console.error(`Error fetching market price:`, error);
+      }
+
+      const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
+      const sideText = orderSide === 'long' ? 'Long (Buy)' : 'Short (Sell)';
+
+      let message = `📊 *Limit Order - ${market.asset}*\n\n`;
+      message += `Side: ${sideEmoji} ${sideText}\n`;
+      message += `Leverage: ${leverage}x\n`;
+      message += `Current Price: $${currentPrice}\n\n`;
+      message += `Enter your limit price:\n\n`;
+
+      if (orderSide === 'long') {
+        message += `• For LONG: Enter price below current price (e.g., $${(parseFloat(currentPrice) * 0.95).toFixed(3)})\n`;
+        message += `• Current: $${currentPrice}\n`;
+      } else {
+        message += `• For SHORT: Enter price above current price (e.g., $${(parseFloat(currentPrice) * 1.05).toFixed(3)})\n`;
+        message += `• Current: $${currentPrice}\n`;
+      }
+
+      message += `\nExample: ${(parseFloat(currentPrice) * (orderSide === 'long' ? 1.05 : 0.95)).toFixed(3)}`;
+
+      const keyboard = new InlineKeyboard()
+        .text("❌ Cancel", `select_market_${marketId}`);
+
+      ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+
+      // Store the order context for price input
+      const userId = ctx.from?.id;
+      if (userId) {
+        this.pendingTransfers.set(userId, {
+          type: 'limit_price_input',
+          marketId,
+          orderSide,
+          leverage,
+          currentPrice: parseFloat(currentPrice)
+        });
+      }
+    } catch (error) {
+      console.error("Error showing limit price input:", error);
+      ctx.reply("❌ Error loading price input. Please try again.", {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "markets")
+      });
+    }
+  }
+
+  private async showOrderSizeInput(ctx: any, marketId: string, orderSide: string, leverage: string, orderType: string, limitPrice?: number) {
     try {
       // Get market info
       const market = findMarketById(marketId);
@@ -1689,8 +1809,11 @@ export class Bot {
       let message = `🎯 *Create Order - ${market.asset}*\n\n`;
       message += `Side: ${sideEmoji} ${sideText}\n`;
       message += `Leverage: ${leverage}x\n`;
-      message += `Type: ${orderTypeEmoji} ${orderTypeText}\n\n`;
-      message += `Enter order size:\n`;
+      message += `Type: ${orderTypeEmoji} ${orderTypeText}\n`;
+      if (limitPrice) {
+        message += `Limit Price: $${limitPrice.toFixed(3)}\n`;
+      }
+      message += `\nEnter order size:\n`;
       message += `Minimum: ${minSizeText}\n`;
       message += `Example: ${minSize} (for ${minSizeText})`;
 
@@ -1708,7 +1831,7 @@ export class Bot {
         this.pendingTransfers.set(userId, {
           assetIndex: -1,
           step: 'order_size_input',
-          orderData: { marketId, orderSide, leverage, orderType, market } as any
+          orderData: { marketId, orderSide, leverage, orderType, market, limitPrice } as any
         });
           }
         } catch (error) {
@@ -1827,11 +1950,45 @@ export class Bot {
         return;
       }
 
+      // Check for existing positions in the same direction
+      const userAddress = getAptosAddress();
+      const positionsResult = await this.kanaLabsPerps.getPositions(userAddress, marketId);
+
       const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
       const sideText = orderSide === 'long' ? 'Long (Buy)' : 'Short (Sell)';
 
+      if (positionsResult.success && positionsResult.data && positionsResult.data.length > 0) {
+        // Check if user has existing position in same direction
+        const existingPosition = positionsResult.data.find(pos => pos.trade_side === (orderSide === 'long'));
+
+        if (existingPosition) {
+          // User has existing position - use existing leverage and skip leverage selection
+          const existingLeverage = existingPosition.leverage;
+
+          let message = `📝 *Create Order - ${market.asset}*\n\n`;
+          message += `Side: ${sideEmoji} ${sideText}\n\n`;
+          message += `🔄 *Adding to Existing Position*\n`;
+          message += `Current Position: ${existingPosition.size} ${market.asset} at ${existingLeverage}x\n`;
+          message += `Leverage: ${existingLeverage}x (locked to existing position)\n\n`;
+          message += `Your new order will add to your existing ${sideText.toLowerCase()} position.`;
+
+          const keyboard = new InlineKeyboard()
+            .text("Continue", `leverage_${marketId}_${orderSide}_${existingLeverage}`)
+            .row()
+            .text("🔙 Back", `select_market_${marketId}`);
+
+          ctx.reply(message, {
+            parse_mode: "Markdown",
+            reply_markup: keyboard
+          });
+          return;
+        }
+      }
+
+      // No existing position - show normal leverage selection
       let message = `📝 *Create Order - ${market.asset}*\n\n`;
       message += `Side: ${sideEmoji} ${sideText}\n\n`;
+      message += `✨ *New Position*\n`;
       message += `Select leverage:\n\n`;
 
       const keyboard = new InlineKeyboard()
@@ -1889,7 +2046,7 @@ export class Bot {
     }
   }
 
-  private async showOrderConfirmation(ctx: any, marketId: string, orderSide: string, leverage: string, orderType: string, market: any, size: number) {
+  private async showOrderConfirmation(ctx: any, marketId: string, orderSide: string, leverage: string, orderType: string, market: any, size: number, limitPrice?: number) {
     try {
       const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
       const sideText = orderSide === 'long' ? 'Long (Buy)' : 'Short (Sell)';
@@ -1901,16 +2058,23 @@ export class Bot {
       message += `Side: ${sideEmoji} ${sideText}\n`;
       message += `Size: ${size} ${this.getAssetSymbol(market.asset)}\n`;
       message += `Type: ${orderTypeEmoji} ${orderTypeText}\n`;
+      if (limitPrice) {
+        message += `Limit Price: $${limitPrice.toFixed(3)}\n`;
+      }
       message += `Leverage: ${leverage}x\n\n`;
 
       if (orderType === 'market') {
       message += `⚠️ *This will place a market order immediately!*`;
       } else {
-        message += `⚠️ *This will place a limit order (price required)*`;
+        message += `⚠️ *This will place a limit order*`;
       }
 
+      const confirmCallback = limitPrice
+        ? `confirm_order_${marketId}_${orderSide}_${leverage}_${orderType}_${size}_${limitPrice}`
+        : `confirm_order_${marketId}_${orderSide}_${leverage}_${orderType}_${size}`;
+
       const keyboard = new InlineKeyboard()
-        .text("✅ Confirm Order", `confirm_order_${marketId}_${orderSide}_${leverage}_${orderType}_${size}`)
+        .text("✅ Confirm Order", confirmCallback)
         .text("❌ Cancel", `select_market_${marketId}`);
 
       ctx.reply(message, {
@@ -1938,7 +2102,7 @@ export class Bot {
     }
   }
 
-  private async executeOrder(ctx: any, marketId: string, orderSide: string, leverage: string, orderType: string, size: number) {
+  private async executeOrder(ctx: any, marketId: string, orderSide: string, leverage: string, orderType: string, size: number, limitPrice?: number) {
     try {
       // Show processing message
       await ctx.reply("🔄 Placing order... Please wait.");
@@ -1950,22 +2114,34 @@ export class Bot {
         return;
       }
 
-      // For now, we'll only handle market orders
-      // TODO: Implement limit orders with price input
-      if (orderType === 'limit') {
-        ctx.reply("❌ Limit orders are not yet implemented. Please use market orders for now.");
-        return;
-      }
-
       // Get transaction payload from Kana Labs API
-      const orderResult = await this.kanaLabsPerps.placeMarketOrder({
+      let orderResult;
+
+      if (orderType === 'limit') {
+        if (!limitPrice) {
+          ctx.reply("❌ Limit price is required for limit orders.");
+          return;
+        }
+
+        orderResult = await this.kanaLabsPerps.placeLimitOrder({
         marketId: marketId,
-        tradeSide: orderSide === 'long', // true for long, false for short
-        direction: false, // false to open a position
+          tradeSide: orderSide === 'long', // true for long, false for short
+          direction: false, // false to open a position
         size: size.toString(),
-        leverage: parseInt(leverage),
+          leverage: parseInt(leverage),
+          orderType: 'limit',
+          price: limitPrice.toString()
+        });
+      } else {
+        orderResult = await this.kanaLabsPerps.placeMarketOrder({
+          marketId: marketId,
+          tradeSide: orderSide === 'long', // true for long, false for short
+          direction: false, // false to open a position
+          size: size.toString(),
+          leverage: parseInt(leverage),
         orderType: 'market'
       });
+      }
 
       if (orderResult.success && orderResult.data) {
         try {
@@ -3467,14 +3643,14 @@ export class Bot {
         return;
       }
 
-      // Format orders message
+      // Format orders message with individual buttons (like positions)
       let message = "📊 *Your Open Orders*\n\n";
+      const keyboard = new InlineKeyboard();
 
       for (const order of allOrders) {
         const orderType = this.getOrderTypeName(order.order_type);
         // Determine side based on order type rather than trade_side
         const isLongOrder = [1, 3, 5, 7].includes(order.order_type); // OPEN_LONG, INCREASE_LONG, DECREASE_LONG, CLOSE_LONG
-        const side = isLongOrder ? "LONG" : "SHORT";
         const sideEmoji = isLongOrder ? "🟢" : "🔴";
 
         // Calculate filled amount
@@ -3483,25 +3659,14 @@ export class Bot {
         const filledSize = totalSize - remainingSize;
         const filledPercentage = totalSize > 0 ? ((filledSize / totalSize) * 100).toFixed(1) : "0";
 
-        message += `${sideEmoji} *${order.market_name}* ${side}\n`;
-        message += `   Type: ${orderType} | Size: ${order.total_size}\n`;
-        message += `   Remaining: ${order.remaining_size} | Filled: ${filledSize.toFixed(4)} (${filledPercentage}%)\n`;
-        message += `   Price: $${order.price} | Value: $${order.order_value}\n`;
-        message += `   Leverage: ${order.leverage}x\n`;
-        message += `   Order ID: \`${order.order_id}\`\n`;
-        if (order.trade_id) {
-          message += `   Trade ID: \`${order.trade_id}\`\n`;
-        }
-        if (order.timestamp) {
-          message += `   Placed: ${new Date(order.timestamp * 1000).toLocaleString()}\n`;
-        }
-        if (order.last_updated && order.last_updated !== order.timestamp) {
-          message += `   Updated: ${new Date(order.last_updated * 1000).toLocaleString()}\n`;
-        }
-        message += "\n";
+        // Create meaningful button text like positions
+        const buttonText = `${sideEmoji} ${order.market_name} ${orderType} | ${this.formatDollar(order.price)} | ${filledPercentage}% filled`;
+
+        // Add button for each order
+        keyboard.text(buttonText, `order_details_${order.order_id}`).row();
       }
 
-      const keyboard = new InlineKeyboard()
+      keyboard
         .text("🔄 Refresh", "open_orders")
         .text("📈 Positions", "positions")
         .row()
@@ -3515,6 +3680,352 @@ export class Bot {
       ctx.reply(`❌ Error loading open orders: ${errorMessage}`, {
         reply_markup: new InlineKeyboard().text("🔙 Back to Home", "start")
       });
+    }
+  }
+
+  private async showOrderDetails(ctx: any, orderId: string) {
+    try {
+      const userAddress = getAptosAddress();
+      console.log(`🔍 [ORDER_DETAILS] Fetching details for order ID: ${orderId}`);
+
+      // Get all available markets first
+      const markets = await this.getAvailableMarkets();
+      let order: any = null;
+      let market: any = null;
+
+      // Search for the order across all markets
+      for (const m of markets) {
+        try {
+          const ordersResult = await this.kanaLabsPerps.getOpenOrders(userAddress, m.market_id);
+          if (ordersResult.success && ordersResult.data) {
+            const foundOrder = ordersResult.data.find(o => o.order_id === orderId);
+            if (foundOrder) {
+              order = { ...foundOrder, market_name: m.base_name };
+              market = m;
+              break;
+            }
+          }
+        } catch (error) {
+          console.error(`Error fetching orders for market ${m.market_id}:`, error);
+        }
+      }
+
+      if (!order || !market) {
+        ctx.reply("❌ Order not found.");
+        return;
+      }
+
+      console.log(`🔍 [ORDER_DETAILS] Order found:`, order);
+
+      // Format detailed order information
+      const orderType = this.getOrderTypeName(order.order_type);
+      const isLongOrder = [1, 3, 5, 7].includes(order.order_type);
+      const side = isLongOrder ? "LONG" : "SHORT";
+      const sideEmoji = isLongOrder ? "🟢" : "🔴";
+
+      // Calculate filled amount
+      const totalSize = parseFloat(order.total_size);
+      const remainingSize = parseFloat(order.remaining_size);
+      const filledSize = totalSize - remainingSize;
+      const filledPercentage = totalSize > 0 ? ((filledSize / totalSize) * 100).toFixed(1) : "0";
+
+      let message = `📊 <b>Order Details</b>\n\n`;
+      message += `${sideEmoji} <b>${order.market_name}</b> ${side}\n\n`;
+      message += `<b>Order Info:</b>\n`;
+      message += `   Type: ${orderType}\n`;
+      message += `   Size: ${order.total_size} | Remaining: ${order.remaining_size}\n`;
+      message += `   Filled: ${filledSize.toFixed(4)} (${filledPercentage}%)\n`;
+      message += `   Price: ${this.formatDollar(order.price)}\n`;
+      message += `   Value: ${this.formatDollar(order.order_value)}\n`;
+      message += `   Leverage: ${order.leverage}x\n\n`;
+      message += `<b>Order Details:</b>\n`;
+      message += `   Order ID: ${order.order_id}\n`;
+      if (order.trade_id) {
+        message += `   Trade ID: ${order.trade_id}\n`;
+      }
+      if (order.timestamp) {
+        message += `   Placed: ${new Date(order.timestamp * 1000).toLocaleString()}\n`;
+      }
+      if (order.last_updated && order.last_updated !== order.timestamp) {
+        message += `   Updated: ${new Date(order.last_updated * 1000).toLocaleString()}\n`;
+      }
+
+      const keyboard = new InlineKeyboard()
+        .text("❌ Cancel", `cancel_order_${orderId}`)
+        .text("🔄 Flip to Market", `flip_to_market_${orderId}`)
+        .row()
+        .text("🔙 Back to Orders", "open_orders");
+
+      ctx.reply(message, {
+        parse_mode: "HTML",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      console.error("Error showing order details:", error);
+      ctx.reply("❌ Error loading order details. Please try again.");
+    }
+  }
+
+  private async cancelOrder(ctx: any, orderId: string) {
+    try {
+      await ctx.reply("🔄 Cancelling order... Please wait.");
+
+      // First, get the order details to extract marketId and orderSide
+      const userAddress = getAptosAddress();
+      const markets = await this.getAvailableMarkets();
+      let order: any = null;
+
+      // Search for the order across all markets
+      for (const market of markets) {
+        try {
+          const ordersResult = await this.kanaLabsPerps.getOpenOrders(userAddress, market.market_id);
+          if (ordersResult.success && ordersResult.data) {
+            const foundOrder = ordersResult.data.find(o => o.order_id === orderId);
+            if (foundOrder) {
+              order = foundOrder;
+              break;
+            }
+          }
+        } catch (error) {
+          console.error(`Error fetching orders for market ${market.market_id}:`, error);
+        }
+      }
+
+      if (!order) {
+        ctx.reply("❌ Order not found.");
+        return;
+      }
+
+      // Determine order side from order type
+      const isLongOrder = [1, 3, 5, 7].includes(order.order_type);
+      const orderSide = isLongOrder;
+
+      // Get transaction payload from Kana Labs API
+      const cancelResult = await this.kanaLabsPerps.cancelOrder({
+        marketId: order.market_id,
+        orderId: orderId,
+        orderSide: orderSide
+      });
+
+      if (cancelResult.success && cancelResult.data) {
+        try {
+          // Build and submit transaction to Aptos
+          const payloadData = cancelResult.data;
+          console.log(`🔍 [CANCEL_ORDER] Transaction payload:`, payloadData);
+
+          // The API returns null for orderIds and tradeSides, but we need to provide them
+          // Convert order ID to BigInt and trade side to boolean
+          const orderIdBigInt = BigInt(orderId);
+          const tradeSideBoolean = orderSide;
+
+          const transactionPayload = await this.aptos.transaction.build.simple({
+            sender: this.APTOS_ADDRESS,
+            data: {
+              function: payloadData.function as `${string}::${string}::${string}`,
+              typeArguments: payloadData.typeArguments || [],
+              functionArguments: [
+                order.market_id, // marketId
+                [orderIdBigInt], // orderIds as vector<u128>
+                [tradeSideBoolean] // tradeSides as vector<bool>
+              ]
+            }
+          });
+
+          const committedTxn = await this.aptos.transaction.signAndSubmitTransaction({
+            transaction: transactionPayload,
+            signer: this.aptosAccount,
+          });
+
+          console.log(`🔍 [CANCEL_ORDER] Transaction submitted: ${committedTxn.hash}`);
+
+          // Wait for transaction confirmation
+          const response = await this.aptos.waitForTransaction({
+            transactionHash: committedTxn.hash,
+          });
+
+          if (response.success) {
+            const message = `❌ *Order Cancelled Successfully!*\n\n` +
+              `Order ID: ${orderId}\n` +
+              `Transaction: \`${committedTxn.hash}\`\n\n` +
+              `Your order has been cancelled.`;
+
+            const keyboard = new InlineKeyboard()
+              .text("📊 View Orders", "open_orders")
+              .text("🏠 Back to Home", "start");
+
+            ctx.reply(message, {
+              parse_mode: "HTML",
+              reply_markup: keyboard
+            });
+          } else {
+            throw new Error(`Transaction failed: ${committedTxn.hash}`);
+          }
+        } catch (txError) {
+          console.error(`❌ [CANCEL_ORDER] Aptos transaction failed:`, txError);
+          ctx.reply(`❌ Error cancelling order: ${txError instanceof Error ? txError.message : 'Unknown error'}`);
+        }
+      } else {
+        ctx.reply(`❌ Cancel order failed: ${cancelResult.message || 'Unknown API error'}`);
+      }
+    } catch (error) {
+      console.error("Error cancelling order:", error);
+      ctx.reply(`❌ Error cancelling order: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async flipOrderToMarket(ctx: any, orderId: string) {
+    try {
+      await ctx.reply("🔄 Converting to market order... Please wait.");
+
+      // First, get the order details to extract parameters
+      const userAddress = getAptosAddress();
+      const markets = await this.getAvailableMarkets();
+      let order: any = null;
+
+      // Search for the order across all markets
+      for (const market of markets) {
+        try {
+          const ordersResult = await this.kanaLabsPerps.getOpenOrders(userAddress, market.market_id);
+          if (ordersResult.success && ordersResult.data) {
+            const foundOrder = ordersResult.data.find(o => o.order_id === orderId);
+            if (foundOrder) {
+              order = foundOrder;
+              break;
+            }
+          }
+        } catch (error) {
+          console.error(`Error fetching orders for market ${market.market_id}:`, error);
+        }
+      }
+
+      if (!order) {
+        ctx.reply("❌ Order not found.");
+        return;
+      }
+
+      // Determine trade side from order type
+      const isLongOrder = [1, 3, 5, 7].includes(order.order_type);
+      const tradeSide = isLongOrder;
+
+      // Step 1: Cancel the existing order
+      const cancelResult = await this.kanaLabsPerps.cancelOrder({
+        marketId: order.market_id,
+        orderId: orderId,
+        orderSide: tradeSide
+      });
+      if (!cancelResult.success) {
+        ctx.reply(`❌ Failed to cancel order: ${cancelResult.message}`);
+        return;
+      }
+
+      // Execute the cancel transaction on Aptos
+      try {
+        const cancelPayloadData = cancelResult.data;
+        const orderIdBigInt = BigInt(orderId);
+        
+        const cancelTransactionPayload = await this.aptos.transaction.build.simple({
+          sender: this.APTOS_ADDRESS,
+          data: {
+            function: cancelPayloadData.function as `${string}::${string}::${string}`,
+            typeArguments: cancelPayloadData.typeArguments || [],
+            functionArguments: [
+              order.market_id, // marketId
+              [orderIdBigInt], // orderIds as vector<u128>
+              [tradeSide] // tradeSides as vector<bool>
+            ]
+          }
+        });
+
+        const cancelTxn = await this.aptos.transaction.signAndSubmitTransaction({
+          transaction: cancelTransactionPayload,
+          signer: this.aptosAccount,
+        });
+
+        console.log(`🔍 [FLIP_TO_MARKET] Cancel transaction submitted: ${cancelTxn.hash}`);
+        
+        // Wait for cancel transaction to complete
+        await this.aptos.waitForTransaction({
+          transactionHash: cancelTxn.hash,
+        });
+      } catch (cancelTxError) {
+        console.error(`❌ [FLIP_TO_MARKET] Cancel transaction failed:`, cancelTxError);
+        ctx.reply(`❌ Error cancelling order: ${cancelTxError instanceof Error ? cancelTxError.message : 'Unknown error'}`);
+        return;
+      }
+
+      // Step 2: Place a new market order with the same parameters
+      const marketOrderResult = await this.kanaLabsPerps.placeMarketOrder({
+        marketId: order.market_id,
+        tradeSide: tradeSide,
+        direction: false, // false to open a position
+        size: order.remaining_size, // Use remaining size
+        leverage: order.leverage,
+        orderType: 'market'
+      });
+
+      if (marketOrderResult.success && marketOrderResult.data) {
+        try {
+          // Build and submit transaction to Aptos
+          const payloadData = marketOrderResult.data;
+          console.log(`🔍 [FLIP_TO_MARKET] Transaction payload:`, payloadData);
+
+          // Map OrderPayload to Aptos SDK format
+          const aptosPayload = {
+            function: payloadData.function as `${string}::${string}::${string}`,
+            typeArguments: payloadData.typeArguments || [],
+            arguments: payloadData.functionArguments || []
+          };
+
+          const transactionPayload = await this.aptos.transaction.build.simple({
+            sender: this.APTOS_ADDRESS,
+            data: {
+              function: aptosPayload.function,
+              typeArguments: aptosPayload.typeArguments,
+              functionArguments: aptosPayload.arguments
+            }
+          });
+
+          const committedTxn = await this.aptos.transaction.signAndSubmitTransaction({
+            transaction: transactionPayload,
+            signer: this.aptosAccount,
+          });
+
+          console.log(`🔍 [FLIP_TO_MARKET] Transaction submitted: ${committedTxn.hash}`);
+
+          // Wait for transaction confirmation
+          const response = await this.aptos.waitForTransaction({
+            transactionHash: committedTxn.hash,
+          });
+
+          if (response.success) {
+            const message = `🔄 *Order Converted to Market Successfully!*\n\n` +
+              `Original Order ID: ${orderId}\n` +
+              `Size: ${order.remaining_size}\n` +
+              `Leverage: ${order.leverage}x\n` +
+              `Transaction: \`${committedTxn.hash}\`\n\n` +
+              `Your limit order has been converted to a market order and executed.`;
+
+            const keyboard = new InlineKeyboard()
+              .text("📊 View Orders", "open_orders")
+              .text("🏠 Back to Home", "start");
+
+            ctx.reply(message, {
+              parse_mode: "HTML",
+              reply_markup: keyboard
+            });
+          } else {
+            throw new Error(`Transaction failed: ${committedTxn.hash}`);
+          }
+        } catch (txError) {
+          console.error(`❌ [FLIP_TO_MARKET] Aptos transaction failed:`, txError);
+          ctx.reply(`❌ Error converting order to market: ${txError instanceof Error ? txError.message : 'Unknown error'}`);
+        }
+      } else {
+        ctx.reply(`❌ Failed to place market order: ${marketOrderResult.message || 'Unknown API error'}`);
+      }
+    } catch (error) {
+      console.error("Error flipping order to market:", error);
+      ctx.reply(`❌ Error converting order to market: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
