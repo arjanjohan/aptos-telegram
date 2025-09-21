@@ -3874,159 +3874,23 @@ export class Bot {
   }
 
   private async flipOrderToMarket(ctx: any, orderId: string) {
-    try {
-      await ctx.reply("🔄 Converting to market order... Please wait.");
+    const message = `🚧 *Coming Soon!*\n\n` +
+      `The "Flip to Market" feature is currently under development.\n\n` +
+      `For now, you can:\n` +
+      `• Cancel your limit order\n` +
+      `• Place a new market order\n\n` +
+      `This feature will be available in a future update!`;
 
-      // First, get the order details to extract parameters
-      const userAddress = getAptosAddress();
-      const markets = await this.getAvailableMarkets();
-      let order: any = null;
+    const keyboard = new InlineKeyboard()
+      .text("❌ Cancel Order", `cancel_order_${orderId}`)
+      .text("📊 View Orders", "open_orders")
+      .row()
+      .text("🏠 Back to Home", "start");
 
-      // Search for the order across all markets
-      for (const market of markets) {
-        try {
-          const ordersResult = await this.kanaLabsPerps.getOpenOrders(userAddress, market.market_id);
-          if (ordersResult.success && ordersResult.data) {
-            const foundOrder = ordersResult.data.find(o => o.order_id === orderId);
-            if (foundOrder) {
-              order = foundOrder;
-              break;
-            }
-          }
-        } catch (error) {
-          console.error(`Error fetching orders for market ${market.market_id}:`, error);
-        }
-      }
-
-      if (!order) {
-        ctx.reply("❌ Order not found.");
-        return;
-      }
-
-      // Determine trade side from order type
-      const isLongOrder = [1, 3, 5, 7].includes(order.order_type);
-      const tradeSide = isLongOrder;
-
-      // Step 1: Cancel the existing order
-      const cancelResult = await this.kanaLabsPerps.cancelOrder({
-        marketId: order.market_id,
-        orderId: orderId,
-        orderSide: tradeSide
-      });
-      if (!cancelResult.success) {
-        ctx.reply(`❌ Failed to cancel order: ${cancelResult.message}`);
-        return;
-      }
-
-      // Execute the cancel transaction on Aptos
-      try {
-        const cancelPayloadData = cancelResult.data;
-        const orderIdBigInt = BigInt(orderId);
-        
-        const cancelTransactionPayload = await this.aptos.transaction.build.simple({
-          sender: this.APTOS_ADDRESS,
-          data: {
-            function: cancelPayloadData.function as `${string}::${string}::${string}`,
-            typeArguments: cancelPayloadData.typeArguments || [],
-            functionArguments: [
-              order.market_id, // marketId
-              [orderIdBigInt], // orderIds as vector<u128>
-              [tradeSide] // tradeSides as vector<bool>
-            ]
-          }
-        });
-
-        const cancelTxn = await this.aptos.transaction.signAndSubmitTransaction({
-          transaction: cancelTransactionPayload,
-          signer: this.aptosAccount,
-        });
-
-        console.log(`🔍 [FLIP_TO_MARKET] Cancel transaction submitted: ${cancelTxn.hash}`);
-        
-        // Wait for cancel transaction to complete
-        await this.aptos.waitForTransaction({
-          transactionHash: cancelTxn.hash,
-        });
-      } catch (cancelTxError) {
-        console.error(`❌ [FLIP_TO_MARKET] Cancel transaction failed:`, cancelTxError);
-        ctx.reply(`❌ Error cancelling order: ${cancelTxError instanceof Error ? cancelTxError.message : 'Unknown error'}`);
-        return;
-      }
-
-      // Step 2: Place a new market order with the same parameters
-      const marketOrderResult = await this.kanaLabsPerps.placeMarketOrder({
-        marketId: order.market_id,
-        tradeSide: tradeSide,
-        direction: false, // false to open a position
-        size: order.remaining_size, // Use remaining size
-        leverage: order.leverage,
-        orderType: 'market'
-      });
-
-      if (marketOrderResult.success && marketOrderResult.data) {
-        try {
-          // Build and submit transaction to Aptos
-          const payloadData = marketOrderResult.data;
-          console.log(`🔍 [FLIP_TO_MARKET] Transaction payload:`, payloadData);
-
-          // Map OrderPayload to Aptos SDK format
-          const aptosPayload = {
-            function: payloadData.function as `${string}::${string}::${string}`,
-            typeArguments: payloadData.typeArguments || [],
-            arguments: payloadData.functionArguments || []
-          };
-
-          const transactionPayload = await this.aptos.transaction.build.simple({
-            sender: this.APTOS_ADDRESS,
-            data: {
-              function: aptosPayload.function,
-              typeArguments: aptosPayload.typeArguments,
-              functionArguments: aptosPayload.arguments
-            }
-          });
-
-          const committedTxn = await this.aptos.transaction.signAndSubmitTransaction({
-            transaction: transactionPayload,
-            signer: this.aptosAccount,
-          });
-
-          console.log(`🔍 [FLIP_TO_MARKET] Transaction submitted: ${committedTxn.hash}`);
-
-          // Wait for transaction confirmation
-          const response = await this.aptos.waitForTransaction({
-            transactionHash: committedTxn.hash,
-          });
-
-          if (response.success) {
-            const message = `🔄 *Order Converted to Market Successfully!*\n\n` +
-              `Original Order ID: ${orderId}\n` +
-              `Size: ${order.remaining_size}\n` +
-              `Leverage: ${order.leverage}x\n` +
-              `Transaction: \`${committedTxn.hash}\`\n\n` +
-              `Your limit order has been converted to a market order and executed.`;
-
-            const keyboard = new InlineKeyboard()
-              .text("📊 View Orders", "open_orders")
-              .text("🏠 Back to Home", "start");
-
-            ctx.reply(message, {
-              parse_mode: "HTML",
-              reply_markup: keyboard
-            });
-          } else {
-            throw new Error(`Transaction failed: ${committedTxn.hash}`);
-          }
-        } catch (txError) {
-          console.error(`❌ [FLIP_TO_MARKET] Aptos transaction failed:`, txError);
-          ctx.reply(`❌ Error converting order to market: ${txError instanceof Error ? txError.message : 'Unknown error'}`);
-        }
-      } else {
-        ctx.reply(`❌ Failed to place market order: ${marketOrderResult.message || 'Unknown API error'}`);
-      }
-    } catch (error) {
-      console.error("Error flipping order to market:", error);
-      ctx.reply(`❌ Error converting order to market: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
+    ctx.reply(message, {
+      parse_mode: "Markdown",
+      reply_markup: keyboard
+    });
   }
 
   private getOrderTypeName(orderType: number): string {

@@ -162,14 +162,30 @@ export class KanaLabsPerpsService {
   /**
    * Cancel and place multiple orders
    */
-  async cancelAndPlaceMultipleOrders(
-    cancelOrderIds: string[],
-    newOrders: PlaceOrderParams[]
-  ): Promise<ApiResponse<OrderPayload>> {
-    return this.makeRequest<OrderPayload>('/cancelAndPlaceMultipleOrders', {
-      cancelOrderIds,
-      newOrders
-    }, 'POST');
+  async cancelAndPlaceMultipleOrders(params: {
+    marketId: string;
+    cancelOrderIds: string[];
+    orderSides: boolean[];
+    orderTypes: string[];
+    tradeSides: boolean[];
+    directions: boolean[];
+    sizes: string[];
+    prices: string[];
+    leverage: string[];
+  }): Promise<ApiResponse<OrderPayload>> {
+    // Convert arrays to comma-separated strings like other functions
+    const queryParams = {
+      marketId: params.marketId,
+      cancelOrderIds: params.cancelOrderIds.join(','),
+      orderSides: params.orderSides.join(','),
+      orderTypes: params.orderTypes.join(','),
+      tradeSides: params.tradeSides.join(','),
+      directions: params.directions.join(','),
+      sizes: params.sizes.join(','),
+      prices: params.prices.join(','),
+      leverage: params.leverage.join(',')
+    };
+    return this.makeRequest<OrderPayload>('/cancelAndPlaceMultipleOrders', queryParams, 'POST');
   }
 
   /**
