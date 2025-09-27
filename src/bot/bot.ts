@@ -33,6 +33,7 @@ export class Bot {
   private pendingTransfers: Map<number, { assetIndex?: number; step?: string; type?: string; recipientAddress?: string; amount?: string; orderData?: { marketId: string; orderSide: string; market: any; limitPrice?: number }; tradeId?: string; marketId?: string; tradeSide?: boolean; orderSide?: string; leverage?: string; currentPrice?: number }> = new Map();
   private pendingDeposits: Map<number, { step: string; amount?: string }> = new Map();
   private pendingVotes: Map<string, { pollId: string; action: string; data: any; voters: Set<number>; startTime: number }> = new Map();
+  private pendingPolls: Map<string, { pollId: string; action: string; data: any; voters: Map<number, number>; startTime: number; requiredVotes: number; chatId: number; messageId: number }> = new Map();
 
   // Settings storage (in production, this would be in a database)
   // TODO: Move to database
@@ -351,6 +352,11 @@ export class Bot {
         await this.promptWithdrawCustomAmount(ctx);
       }
     });
+
+    // Handle poll answers for group voting
+    this.bot.on("poll_answer", async (ctx) => {
+      await this.handlePollAnswer(ctx);
+    });
   }
 
   private getMainMenu(): InlineKeyboard {
@@ -392,7 +398,7 @@ export class Bot {
           profile: profileBalance.data
         });
 
-
+// todo: get actual values
         message += `⏳ Pending Orders: 1\n`;
         message += `💻 Open Orders: 0\n`;
         message += `📊 Open Positions: 2\n\n`;
@@ -1014,9 +1020,6 @@ export class Bot {
         return;
       }
 
-      // Show processing message
-      await ctx.reply("🔄 Setting take profit... Please wait.");
-
       // Call the Kana Labs API
       console.log(`🔍 [EXECUTE_TP] API Call params:`, {
         marketId: position.market_id,
@@ -1126,9 +1129,6 @@ export class Bot {
         return;
       }
 
-      // Show processing message
-      await ctx.reply("🔄 Setting stop loss... Please wait.");
-
       // Call the Kana Labs API
       console.log(`🔍 [EXECUTE_SL] API Call params:`, {
         marketId: position.market_id,
@@ -1237,9 +1237,6 @@ export class Bot {
         });
         return;
       }
-
-      // Show processing message
-      await ctx.reply("🔄 Closing position... Please wait.");
 
       // For closing a position, we need to reverse the direction
       // If position is LONG (true), we need to SHORT (false) to close it
@@ -1363,9 +1360,6 @@ export class Bot {
         });
         return;
       }
-
-      // Show processing message
-      await ctx.reply("🔄 Adding margin... Please wait.");
 
       // Call the Kana Labs addMargin API
       console.log(`🔍 [EXECUTE_ADD_MARGIN] API Call params:`, {
@@ -2104,8 +2098,52 @@ export class Bot {
 
   private async executeOrder(ctx: any, marketId: string, orderSide: string, leverage: string, orderType: string, size: number, limitPrice?: number) {
     try {
-      // Show processing message
-      await ctx.reply("🔄 Placing order... Please wait.");
+      // Get market info
+      const market = findMarketById(marketId);
+      if (!market) {
+        ctx.reply("❌ Market not found.");
+        return;
+      }
+
+      // Create poll for order approval
+      const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
+      const sideText = orderSide === 'long' ? 'Long' : 'Short';
+      const orderTypeEmoji = orderType === 'market' ? '⚡' : '📊';
+      const orderTypeText = orderType === 'market' ? 'Market Order' : 'Limit Order';
+
+      const description = `<b>${orderTypeText}</b>\n\n` +
+        `Market: ${market.asset}\n` +
+        `Side: ${sideEmoji} ${sideText}\n` +
+        `Size: ${size} ${this.getAssetSymbol(market.asset)}\n` +
+        `Leverage: ${leverage}x${limitPrice ? `\nPrice: $${limitPrice}` : ''}`;
+
+      const pollId = await this.createVotingPoll(ctx, 'place_order', {
+        marketId,
+        orderSide,
+        leverage,
+        orderType,
+        size,
+        limitPrice,
+        chatId: ctx.chat.id
+      }, description);
+
+      // Clear any pending order data
+      const userId = ctx.from?.id;
+      if (userId) {
+        this.pendingTransfers.delete(userId);
+      }
+
+    } catch (error) {
+      console.error("Error creating order poll:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Error creating order poll: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Markets", "create_order")
+      });
+    }
+  }
+
+  private async executeOrderDirect(ctx: any, marketId: string, orderSide: string, leverage: string, orderType: string, size: number, limitPrice?: number) {
+    try {
 
       // Get market info
       const market = findMarketById(marketId);
@@ -2503,9 +2541,6 @@ export class Bot {
         return;
       }
 
-      // Show processing message
-      await ctx.reply("🔄 Processing deposit... Please wait.");
-
       // Call Kana Labs deposit API to get transaction payload
       const depositResult = await this.kanaLabsPerps.deposit({
         amount: pendingDeposit.amount || '0',
@@ -2701,9 +2736,6 @@ export class Bot {
         ctx.reply("❌ Error: Withdraw session expired. Please start over.");
         return;
       }
-
-      // Show processing message
-      await ctx.reply("🔄 Processing withdraw... Please wait.");
 
       // Get all market IDs for current network
       const marketIds = this.getMarketIds();
@@ -3137,27 +3169,148 @@ export class Bot {
       const pnlEmoji = pnl >= 0 ? "📈" : "📉";
       const pnlSign = pnl >= 0 ? "+" : "";
 
-      let message = `🔴 *Close Position*\n\n`;
-      message += `${sideEmoji} *${marketName}* ${side}\n`;
-      message += `Size: ${position.size}\n`;
-      message += `Entry Price: ${this.formatDollar(entryPrice)}\n`;
-      message += `Current Price: ${this.formatDollar(currentPrice)}\n`;
-      message += `PnL: ${pnlEmoji} ${pnlSign}${this.formatDollar(pnl)}\n\n`;
-      message += `⚠️ This will close your entire position at market price.\n`;
-      message += `Are you sure you want to close this position?`;
+      // Create poll for close position approval
+      const description = `<b>Close Position</b>\n\n` +
+        `Market: ${marketName}\n` +
+        `Side: ${sideEmoji} ${side}\n` +
+        `Size: ${position.size}\n` +
+        `Entry Price: ${this.formatDollar(entryPrice)}\n` +
+        `Current Price: ${this.formatDollar(currentPrice)}\n` +
+        `PnL: ${pnlEmoji} ${pnlSign}${this.formatDollar(pnl)}\n\n` +
+        `⚠️ This will close your entire position at market price.`;
 
-      const keyboard = new InlineKeyboard()
-        .text("✅ Yes, Close Position", `confirm_close_${tradeId}`)
-        .text("❌ Cancel", `position_details_${tradeId}`)
-        .row();
-
-      ctx.reply(message, {
-        reply_markup: keyboard,
-        parse_mode: "Markdown"
-      });
+      const pollId = await this.createVotingPoll(ctx, 'close_position', {
+        tradeId,
+        marketId: position.market_id,
+        tradeSide: position.trade_side,
+        chatId: ctx.chat.id
+      }, description);
 
     } catch (error) {
-      console.error("Error closing position:", error);
+      console.error("Error creating close position poll:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      ctx.reply(`❌ Error creating close position poll: ${errorMessage}`, {
+        reply_markup: new InlineKeyboard().text("🔙 Back to Position", `position_details_${tradeId}`)
+      });
+    }
+  }
+
+  private async closePositionDirect(ctx: any, tradeId: string, marketId: string, tradeSide: boolean) {
+    try {
+      console.log(`🔍 [EXECUTE_CLOSE] Executing close position for trade ID: ${tradeId}`);
+
+      // Get the position to find market details
+      const userAddress = getAptosAddress();
+      const markets = await this.getAvailableMarkets();
+
+      const allPositions = [];
+      for (const market of markets) {
+        try {
+          const positionsResult = await this.kanaLabsPerps.getPositions(userAddress, market.market_id);
+          if (positionsResult.success && positionsResult.data.length > 0) {
+            const positionsWithMarket = positionsResult.data.map(pos => ({ ...pos, market_name: market.base_name }));
+            allPositions.push(...positionsWithMarket);
+          }
+        } catch (error) {
+          console.error(`Error fetching positions for market ${market.market_id}:`, error);
+        }
+      }
+
+      const position = allPositions.find(p => p.trade_id === tradeId);
+
+      if (!position) {
+        ctx.reply("❌ Position not found. It may have been closed.", {
+          reply_markup: new InlineKeyboard().text("🔙 Back to Positions", "positions")
+        });
+        return;
+      }
+
+      // For closing a position, we need to reverse the direction
+      // If position is LONG (true), we need to SHORT (false) to close it
+      // If position is SHORT (false), we need to LONG (true) to close it
+      const closeSide = !position.trade_side;
+
+      console.log(`🔍 [EXECUTE_CLOSE] API Call params:`, {
+        marketId: position.market_id,
+        tradeSide: position.trade_side,
+        direction: true, // true to close a position
+        size: position.size,
+        leverage: position.leverage,
+        takeProfit: 0, // optional, default to 0
+        stopLoss: 0    // optional, default to 0
+      });
+
+      // Get market order payload to close the position
+      const result = await this.kanaLabsPerps.getMarketOrderPayload({
+        marketId: position.market_id,
+        size: position.size,
+        tradeSide: position.trade_side,
+        direction: true, // true to close a position
+        leverage: position.leverage,
+        takeProfit: 0, // optional, default to 0
+        stopLoss: 0    // optional, default to 0
+      });
+
+      console.log(`🔍 [EXECUTE_CLOSE] API Response:`, result);
+
+      if (result.success) {
+        // The API returns a transaction payload that needs to be submitted to the blockchain
+        const payloadData = result.data;
+
+        console.log(`🔍 [EXECUTE_CLOSE] Building transaction with payload:`, payloadData);
+
+        // Build the transaction
+        const transactionPayload = await this.aptos.transaction.build.simple({
+          sender: this.aptosAccount.accountAddress,
+          data: {
+            function: payloadData.function as `${string}::${string}::${string}`,
+            functionArguments: payloadData.functionArguments,
+            typeArguments: payloadData.typeArguments
+          }
+        });
+
+        console.log(`🔍 [EXECUTE_CLOSE] Transaction built, signing and submitting...`);
+
+        // Sign and submit the transaction
+        const committedTxn = await this.aptos.transaction.signAndSubmitTransaction({
+          transaction: transactionPayload,
+          signer: this.aptosAccount,
+        });
+
+        console.log(`🔍 [EXECUTE_CLOSE] Transaction submitted:`, committedTxn.hash);
+
+        // Wait for transaction confirmation
+      await this.aptos.waitForTransaction({
+          transactionHash: committedTxn.hash,
+        });
+
+        console.log(`🔍 [EXECUTE_CLOSE] Transaction confirmed!`);
+
+        const marketName = position.market_name || `Market ${position.market_id}`;
+        const side = position.trade_side ? "LONG" : "SHORT";
+        const sideEmoji = position.trade_side ? "🟢" : "🔴";
+
+        let message = `✅ *Position Closed Successfully*\n\n`;
+        message += `${sideEmoji} *${marketName}* ${side}\n`;
+        message += `Size: ${position.size}\n`;
+        message += `Closed with: ${closeSide ? "LONG" : "SHORT"} order\n\n`;
+        message += `Transaction Hash: \`${committedTxn.hash}\`\n\n`;
+        message += `Your position has been closed at market price.`;
+
+        const keyboard = new InlineKeyboard()
+          .text("🔙 Back to Positions", "positions")
+          .text("🏠 Home", "start");
+
+        ctx.reply(message, {
+          reply_markup: keyboard,
+          parse_mode: "Markdown"
+        });
+      } else {
+        throw new Error(result.message);
+      }
+
+    } catch (error) {
+      console.error("Error executing close position:", error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       ctx.reply(`❌ Error closing position: ${errorMessage}`, {
         reply_markup: new InlineKeyboard().text("🔙 Back to Position", `position_details_${tradeId}`)
@@ -3768,6 +3921,61 @@ export class Bot {
 
   private async cancelOrder(ctx: any, orderId: string) {
     try {
+      // First, get the order details to extract marketId and orderSide
+      const userAddress = getAptosAddress();
+      const markets = await this.getAvailableMarkets();
+      let order: any = null;
+
+      // Search for the order across all markets
+      for (const market of markets) {
+        try {
+          const ordersResult = await this.kanaLabsPerps.getOpenOrders(userAddress, market.market_id);
+          if (ordersResult.success && ordersResult.data) {
+            const foundOrder = ordersResult.data.find(o => o.order_id === orderId);
+            if (foundOrder) {
+              order = foundOrder;
+              break;
+            }
+          }
+        } catch (error) {
+          console.error(`Error fetching orders for market ${market.market_id}:`, error);
+        }
+      }
+
+      if (!order) {
+        ctx.reply("❌ Order not found.");
+        return;
+      }
+
+      // Create poll for cancel order approval
+      const orderType = this.getOrderTypeName(order.order_type);
+      const isLongOrder = [1, 3, 5, 7].includes(order.order_type);
+      const sideEmoji = isLongOrder ? "🟢" : "🔴";
+      const sideText = isLongOrder ? "LONG" : "SHORT";
+
+      // Get market name from our market config
+      const market = findMarketById(order.market_id);
+      const marketName = market?.asset || `Market ${order.market_id}`;
+
+      const description = `<b>Cancel Order</b>\n\n` +
+        `Market: ${marketName}\n` +
+        `Type: ${sideEmoji} ${orderType}\n` +
+        `Size: ${order.remaining_size}\n` +
+        `Price: $${order.price}`;
+
+      const pollId = await this.createVotingPoll(ctx, 'cancel_order', {
+        orderId,
+        chatId: ctx.chat.id
+      }, description);
+
+    } catch (error) {
+      console.error("Error creating cancel order poll:", error);
+      ctx.reply(`❌ Error creating cancel order poll: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async cancelOrderDirect(ctx: any, orderId: string) {
+    try {
       await ctx.reply("🔄 Cancelling order... Please wait.");
 
       // First, get the order details to extract marketId and orderSide
@@ -3905,6 +4113,177 @@ export class Bot {
       8: "CLOSE_SHORT"
     };
     return orderTypes[orderType] || `UNKNOWN_${orderType}`;
+  }
+
+  private isGroupChat(ctx: any): boolean {
+    return ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
+  }
+
+  private async getGroupMemberCount(ctx: any): Promise<number> {
+    try {
+      if (!this.isGroupChat(ctx)) {
+        return 1; // Private chat
+      }
+
+      const memberCount = await ctx.api.getChatMemberCount(ctx.chat.id);
+      return memberCount;
+    } catch (error) {
+      console.error("Error getting group member count:", error);
+      return 1; // Fallback to 1 for private chat
+    }
+  }
+
+  private async createVotingPoll(ctx: any, action: string, data: any, description: string): Promise<string> {
+    const memberCount = await this.getGroupMemberCount(ctx);
+    const isGroup = this.isGroupChat(ctx);
+
+    // Calculate required votes based on group size and settings
+    let requiredVotes: number;
+    if (isGroup) {
+      // For groups, require at least 30% of members to vote, minimum 2, maximum 10
+      requiredVotes = Math.max(2, Math.min(10, Math.ceil(memberCount * 0.3)));
+    } else {
+      // For private chats, just 1 vote (the user)
+      requiredVotes = 1;
+    }
+
+    const pollId = `poll_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    const pollMessage = await ctx.reply(`🗳️ <b>Voting Required: </b>${description}\n\n` +
+      `Required votes: ${requiredVotes}${isGroup ? ` (${memberCount} members in group)` : ''}`, {
+      parse_mode: "HTML"
+    });
+
+    // Create the poll
+    const poll = await ctx.api.sendPoll(ctx.chat.id,
+      `Vote: ${action}`,
+      [
+        "✅ Approve",
+        "❌ Reject"
+      ],
+      {
+        is_anonymous: false,
+        allows_multiple_answers: false,
+        reply_to_message_id: pollMessage.message_id
+      }
+    );
+
+    // Store poll information
+    this.pendingPolls.set(pollId, {
+      pollId: poll.poll.id,
+      action,
+      data,
+      voters: new Map(),
+      startTime: Date.now(),
+      requiredVotes,
+      chatId: ctx.chat.id,
+      messageId: pollMessage.message_id
+    });
+
+    return pollId;
+  }
+
+  private async handlePollAnswer(ctx: any) {
+    const pollAnswer = ctx.pollAnswer;
+    if (!pollAnswer) return;
+
+    const pollId = pollAnswer.poll_id;
+    const userId = pollAnswer.user.id;
+    const optionIds = pollAnswer.option_ids;
+
+    // Find the poll in our pending polls
+    let foundPoll: any = null;
+    let foundPollKey: string = '';
+    for (const [id, poll] of this.pendingPolls.entries()) {
+      if (poll.pollId === pollId) {
+        foundPoll = poll;
+        foundPollKey = id;
+        break;
+      }
+    }
+
+    if (!foundPoll) return;
+
+    // Store the user's vote (0 = approve, 1 = reject)
+    const voteOption = optionIds[0]; // 0 for approve, 1 for reject
+    foundPoll.voters.set(userId, voteOption);
+
+    // Count votes
+    const totalVotes = foundPoll.voters.size;
+    const approveVotes = Array.from(foundPoll.voters.values()).filter(vote => vote === 0).length;
+    const rejectVotes = Array.from(foundPoll.voters.values()).filter(vote => vote === 1).length;
+
+    // Check if we have enough votes
+    if (totalVotes >= foundPoll.requiredVotes) {
+      try {
+        // Clean up the poll
+        this.pendingPolls.delete(foundPollKey);
+
+        // Determine if approved (more approve votes than reject votes)
+        const isApproved = approveVotes > rejectVotes;
+
+        if (isApproved) {
+          await ctx.api.sendMessage(foundPoll.chatId, "✅ <b>Vote Passed!</b> Executing transaction...", { parse_mode: "HTML" });
+          await this.executeApprovedAction(ctx, foundPoll.action, foundPoll.data);
+        } else {
+          await ctx.api.sendMessage(foundPoll.chatId, "❌ <b>Vote Rejected!</b> Transaction cancelled.", { parse_mode: "HTML" });
+        }
+      } catch (error) {
+        console.error("Error handling poll results:", error);
+        await ctx.api.sendMessage(foundPoll.chatId, "❌ Error processing vote results.");
+      }
+    } else {
+      // Update the poll message with current vote count
+      const remainingVotes = foundPoll.requiredVotes - totalVotes;
+      await ctx.api.editMessageText(foundPoll.chatId, foundPoll.messageId,
+        `🗳️ <b>Voting Required</b>\n\n${foundPoll.action}\n\n` +
+        `Current votes: ${totalVotes}/${foundPoll.requiredVotes}\n` +
+        `Approve: ${approveVotes} | Reject: ${rejectVotes}\n` +
+        `Remaining votes needed: ${remainingVotes}`,
+        { parse_mode: "HTML" }
+      );
+    }
+  }
+
+  private async executeApprovedAction(ctx: any, action: string, data: any) {
+    try {
+      // Get the chat ID from the poll data or context
+      const chatId = ctx.chat?.id || data.chatId;
+
+      if (!chatId) {
+        console.error("No chat ID available for executing approved action");
+        return;
+      }
+
+      // Create a mock context for the direct execution methods
+      const mockCtx = {
+        ...ctx,
+        chat: { id: chatId },
+        reply: async (message: string, options?: any) => {
+          return await ctx.api.sendMessage(chatId, message, options);
+        }
+      };
+
+      switch (action) {
+        case 'place_order':
+          await this.executeOrderDirect(mockCtx, data.marketId, data.orderSide, data.leverage, data.orderType, data.size, data.limitPrice);
+          break;
+        case 'cancel_order':
+          await this.cancelOrderDirect(mockCtx, data.orderId);
+          break;
+        case 'close_position':
+          await this.closePositionDirect(mockCtx, data.tradeId, data.marketId, data.tradeSide);
+          break;
+        default:
+          console.error(`Unknown action: ${action}`);
+      }
+    } catch (error) {
+      console.error(`Error executing approved action ${action}:`, error);
+      const chatId = ctx.chat?.id || data.chatId;
+      if (chatId) {
+        await ctx.api.sendMessage(chatId, `❌ Error executing ${action}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+    }
   }
 
   private async showExportPrivateKeyWarning(ctx: any) {
@@ -4180,125 +4559,4 @@ export class Bot {
     console.log("🤖 Aptos Perps Telegram Bot started!");
   }
 
-  // Voting functionality
-  private async createVotingPoll(ctx: any, action: string, data: any): Promise<boolean> {
-    try {
-      // Check if we're in a group chat
-      if (ctx.chat?.type !== 'group' && ctx.chat?.type !== 'supergroup') {
-        return true; // Skip voting in private chats
-      }
-
-      const pollId = `vote_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const question = this.getVotingQuestion(action, data);
-
-      // Create poll
-      const poll = await ctx.replyWithPoll(question, [
-        "✅ Approve",
-        "❌ Reject"
-      ], {
-        is_anonymous: false,
-        type: "regular",
-        open_period: this.settings.votingTimePeriod
-      });
-
-      // Store pending vote
-      this.pendingVotes.set(pollId, {
-        pollId: poll.poll.id,
-        action,
-        data,
-        voters: new Set(),
-        startTime: Date.now()
-      });
-
-      // Set up poll result handler
-      this.setupPollResultHandler(pollId);
-
-      return false; // Voting in progress
-    } catch (error) {
-      console.error("Error creating voting poll:", error);
-      return true; // Skip voting on error
-    }
-  }
-
-  private getVotingQuestion(action: string, data: any): string {
-    switch (action) {
-      case 'transfer':
-        return `🗳️ *Vote Required: Transfer ${data.symbol}*\n\n` +
-          `Amount: ${data.amount} ${data.symbol}\n` +
-          `To: \`${data.recipientAddress}\`\n` +
-          `Value: ~$${data.value}\n\n` +
-          `Vote to approve or reject this transfer.`;
-
-      case 'deposit':
-        return `🗳️ *Vote Required: Deposit to ${data.marketName}*\n\n` +
-          `Amount: ${data.amount} USDT\n` +
-          `Market: ${data.marketName}\n` +
-          `Max Leverage: ${data.maxLeverage}x\n\n` +
-          `Vote to approve or reject this deposit.`;
-
-      case 'order':
-        return `🗳️ *Vote Required: Create Order*\n\n` +
-          `Type: ${data.orderType}\n` +
-          `Market: ${data.marketName}\n` +
-          `Size: ${data.size}\n` +
-          `Price: $${data.price}\n\n` +
-          `Vote to approve or reject this order.`;
-
-      default:
-        return `🗳️ *Vote Required: ${action}*\n\n` +
-          `Please vote to approve or reject this action.`;
-    }
-  }
-
-  private setupPollResultHandler(pollId: string) {
-    // Set up a timeout to check poll results
-    setTimeout(async () => {
-      await this.checkPollResults(pollId);
-    }, this.settings.votingTimePeriod * 1000 + 5000); // Add 5 second buffer
-  }
-
-  private async checkPollResults(pollId: string) {
-    try {
-      const voteData = this.pendingVotes.get(pollId);
-      if (!voteData) return;
-
-      // Get poll results (this would need to be implemented with Telegram Bot API)
-      // For now, we'll simulate the check
-      const totalVotes = voteData.voters.size;
-      const approvalVotes = Math.floor(totalVotes * 0.6); // Simulate 60% approval
-
-      // Only check threshold percentage (no minimum vote requirement)
-      const approved = totalVotes > 0 && (approvalVotes / totalVotes) >= this.settings.votingThreshold;
-
-      if (approved) {
-        await this.executeApprovedAction(voteData);
-      } else {
-        await this.notifyVoteRejected(voteData);
-      }
-
-      // Clean up
-      this.pendingVotes.delete(pollId);
-    } catch (error) {
-      console.error("Error checking poll results:", error);
-    }
-  }
-
-  private async executeApprovedAction(voteData: any) {
-    try {
-      // This would execute the approved action
-      console.log(`✅ Vote approved for action: ${voteData.action}`, voteData.data);
-      // Implementation would depend on the specific action
-    } catch (error) {
-      console.error("Error executing approved action:", error);
-    }
-  }
-
-  private async notifyVoteRejected(voteData: any) {
-    try {
-      console.log(`❌ Vote rejected for action: ${voteData.action}`, voteData.data);
-      // Implementation would notify users of rejection
-    } catch (error) {
-      console.error("Error notifying vote rejection:", error);
-    }
-  }
 }

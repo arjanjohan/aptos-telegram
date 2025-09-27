@@ -82,7 +82,7 @@ aptos-telegram/
 - `/start` - Show main menu and bot information
 - `/markets` - Browse available trading markets
 - `/deposit` - Deposit funds to Kana Labs account
-- `/settings` - Bot settings (coming soon)
+- `/settings` - Bot settings
 
 ### **Trading Flow**
 1. **Select Market**: Choose from available perpetual futures markets
@@ -155,14 +155,13 @@ This project uses the  following Kana Labs Perpetual Futures API endpoints:
   - `/deposit` - Deposit USDT to Kana Labs (GET request)
   - `/withdrawMultipleMarkets` - Withdraw from Kana Labs (GET request)
 
-## TODO
+## Roadmap
 
 This is a proof of concept for the CTRL+MOVE hackathon. To make this project production ready, the following features still need to be added:
 - **Group Management**:
   - Ensure only verified members can vote
   - Ensure members can only withdraw pro-rate to their deposits
 - **Advanced Trading**:
-   - Limit orders
    - Order modifications
    - partial position closes
 - **Analytics & Reporting**:
@@ -172,8 +171,13 @@ This is a proof of concept for the CTRL+MOVE hackathon. To make this project pro
 - **Notification Settings**:
   - Customizable alerts and notifications
 - **Voting Integration**:
-  - Voting system for trading actions
   - Customize/override voting requirements per action
-  - Optional admin rights, to allow actions without voting
+  - Admin actions, to allow certain actions without voting (for example, give one person right to manager positions but require group to handle withdrawals)
 - **Key management**:
-  - Store privatekey of KanaLabs account securely
+  - Store privatekey of Aptos account securely
+- **Simplify actions**:
+  - Some actions that could be executed directly on Aptos, without making API calls to Kana API.
+
+  ## Team
+
+  MoveTogether is built as a solo project by [arjanjohan](https://x.com/arjanjohan)
