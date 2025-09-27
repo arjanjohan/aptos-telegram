@@ -969,13 +969,13 @@ export class Bot {
       const { marketId, orderSide, leverage, currentPrice } = pendingTransfer;
 
       // Validate price based on order side
-      if (orderSide === 'long' && price <= currentPrice) {
-        ctx.reply(`❌ For LONG orders, limit price must be above current price ($${currentPrice.toFixed(3)}). Please try again:`);
+      if (orderSide === 'long' && price >= currentPrice) {
+        ctx.reply(`❌ For LONG orders, limit price must be below current price ($${currentPrice.toFixed(3)}). Please try again:`);
         return;
       }
 
-      if (orderSide === 'short' && price >= currentPrice) {
-        ctx.reply(`❌ For SHORT orders, limit price must be below current price ($${currentPrice.toFixed(3)}). Please try again:`);
+      if (orderSide === 'short' && price <= currentPrice) {
+        ctx.reply(`❌ For SHORT orders, limit price must be above current price ($${currentPrice.toFixed(3)}). Please try again:`);
         return;
       }
 
@@ -1074,9 +1074,8 @@ export class Bot {
 
         let message = `✅ *Take Profit Set Successfully*\n\n`;
         message += `${sideEmoji} *${marketName}* ${side}\n`;
-        message += `Take Profit Price: ${this.formatDollar(price)}\n\n`;
-        message += `Transaction Hash: \`${committedTxn.hash}\`\n\n`;
-        message += `Your take profit order has been placed and will execute when the price reaches ${this.formatDollar(price)}.`;
+        message += `Your take profit order has been placed. ${this.formatTransactionLink(committedTxn.hash, "View on Explorer")}\n\n`;
+        message += `This order will execute when the price reaches ${this.formatDollar(price)}.`;
 
         const keyboard = new InlineKeyboard()
           .text("🔙 Back to Position", `position_details_${tradeId}`)
@@ -1183,9 +1182,8 @@ export class Bot {
 
         let message = `✅ *Stop Loss Set Successfully*\n\n`;
         message += `${sideEmoji} *${marketName}* ${side}\n`;
-        message += `Stop Loss Price: ${this.formatDollar(price)}\n\n`;
-        message += `Transaction Hash: \`${committedTxn.hash}\`\n\n`;
-        message += `Your stop loss order has been placed and will execute when the price reaches ${this.formatDollar(price)}.`;
+        message += `Your stop loss order has been placed. ${this.formatTransactionLink(committedTxn.hash, "View on Explorer")}\n\n`;
+        message += `This order will execute when the price reaches ${this.formatDollar(price)}.`;
 
       const keyboard = new InlineKeyboard()
           .text("🔙 Back to Position", `position_details_${tradeId}`)
@@ -1307,8 +1305,7 @@ export class Bot {
         message += `${sideEmoji} *${marketName}* ${side}\n`;
         message += `Size: ${position.size}\n`;
         message += `Closed with: ${closeSide ? "LONG" : "SHORT"} order\n\n`;
-        message += `Transaction Hash: \`${committedTxn.hash}\`\n\n`;
-        message += `Your position has been closed at market price.`;
+        message += `Your position has been closed at market price. ${this.formatTransactionLink(committedTxn.hash, "View on Explorer")}`;
 
         const keyboard = new InlineKeyboard()
           .text("🔙 Back to Positions", "positions")
@@ -1416,8 +1413,7 @@ export class Bot {
         let message = `✅ *Margin Added Successfully*\n\n`;
         message += `${sideEmoji} *${marketName}* ${side}\n`;
         message += `Amount Added: ${this.formatDollar(amount)}\n\n`;
-        message += `Transaction Hash: \`${committedTxn.hash}\`\n\n`;
-        message += `Your position's margin has been increased by ${this.formatDollar(amount)}.`;
+        message += `Your position's margin has been increased by ${this.formatDollar(amount)}. ${this.formatTransactionLink(committedTxn.hash, "View on Explorer")}`;
 
         const keyboard = new InlineKeyboard()
           .text("🔙 Back to Position", `position_details_${tradeId}`)
@@ -1451,18 +1447,17 @@ export class Bot {
     return `$${numValue.toFixed(2)}`;
   }
 
+  private getExplorerLink(txHash: string): string {
+    const network = isTestnet() ? 'testnet' : 'mainnet';
+    return `https://explorer.aptoslabs.com/txn/${txHash}?network=${network}`;
+  }
 
-
-
-
-
-
-
-
-
-
-
-
+  private formatTransactionLink(txHash: string, displayText?: string): string {
+    const link = this.getExplorerLink(txHash);
+    const text = displayText || txHash;
+    return `[${text}](${link})`;
+    // return `<a href="${link}">${text}</a>`;
+  }
 
   private async showMarketSelection(ctx: any) {
     try {
@@ -2233,7 +2228,7 @@ export class Bot {
               `Size: ${size} ${this.getAssetSymbol(market.asset)}\n` +
               `Type: ${orderTypeEmoji} ${orderTypeText}\n` +
               `Leverage: ${leverage}x\n\n` +
-              `Transaction: \`${committedTxn.hash}\`\n` +
+              `Transaction: ${this.formatTransactionLink(committedTxn.hash, "View on Explorer")}\n` +
           `Your order has been submitted to the market.`;
 
         const keyboard = new InlineKeyboard()
@@ -2582,8 +2577,7 @@ export class Bot {
       // Show success message
       const message = `✅ *Deposit Successful!*\n\n` +
         `*Amount:* ${pendingDeposit.amount} USDT\n` +
-        `*Transaction Hash:* \`${committedTxn.hash}\`\n\n` +
-        `Your deposit has been processed successfully!`;
+        `Your deposit has been processed successfully! ${this.formatTransactionLink(committedTxn.hash, "View on Explorer")}`;
 
       const keyboard = new InlineKeyboard()
         .text(" Back to Home", "start");
@@ -2782,8 +2776,7 @@ export class Bot {
       // Show success message
       const message = `✅ *Withdraw Successful!*\n\n` +
         `*Amount:* ${pendingDeposit.amount} USDT\n` +
-        `*Transaction Hash:* \`${committedTxn.hash}\`\n\n` +
-        `Your withdraw has been processed successfully!`;
+        `Your withdraw has been processed successfully! ${this.formatTransactionLink(committedTxn.hash, "View on Explorer")}`;
 
       const keyboard = new InlineKeyboard()
         .text("🔙 Back to Home", "start");
@@ -2935,10 +2928,9 @@ export class Bot {
         const pnlEmoji = pnl >= 0 ? "📈" : "📉";
         const pnlSign = pnl >= 0 ? "+" : "";
 
-        // Calculate PnL percentage
-        const entryPrice = parseFloat(position.entry_price);
-        const currentPrice = parseFloat(position.price || position.entry_price);
-        const pnlPercentage = entryPrice > 0 ? ((currentPrice - entryPrice) / entryPrice * 100) : 0;
+        // Calculate PnL percentage based on margin (consistent with position details)
+        const margin = parseFloat(position.margin || "0");
+        const pnlPercentage = margin > 0 ? (pnl / margin) * 100 : 0;
 
         const marketName = position.market_name || `Market ${position.market_id}`;
         const buttonText = `${sideEmoji} ${marketName} ${side}\nSize: ${position.size} | PnL: ${pnlEmoji} ${pnlSign}${pnlPercentage.toFixed(2)}%`;
@@ -3169,6 +3161,10 @@ export class Bot {
       const pnlEmoji = pnl >= 0 ? "📈" : "📉";
       const pnlSign = pnl >= 0 ? "+" : "";
 
+      // Calculate PnL percentage based on margin (consistent with other views)
+      const margin = parseFloat(position.margin || "0");
+      const pnlPercentage = margin > 0 ? (pnl / margin) * 100 : 0;
+
       // Create poll for close position approval
       const description = `<b>Close Position</b>\n\n` +
         `Market: ${marketName}\n` +
@@ -3176,7 +3172,7 @@ export class Bot {
         `Size: ${position.size}\n` +
         `Entry Price: ${this.formatDollar(entryPrice)}\n` +
         `Current Price: ${this.formatDollar(currentPrice)}\n` +
-        `PnL: ${pnlEmoji} ${pnlSign}${this.formatDollar(pnl)}\n\n` +
+        `PnL: ${pnlEmoji} ${pnlSign}${this.formatDollar(pnl)} (${pnlPercentage.toFixed(2)}%)\n\n` +
         `⚠️ This will close your entire position at market price.`;
 
       const pollId = await this.createVotingPoll(ctx, 'close_position', {
@@ -3294,7 +3290,7 @@ export class Bot {
         message += `${sideEmoji} *${marketName}* ${side}\n`;
         message += `Size: ${position.size}\n`;
         message += `Closed with: ${closeSide ? "LONG" : "SHORT"} order\n\n`;
-        message += `Transaction Hash: \`${committedTxn.hash}\`\n\n`;
+        message += `Transaction: ${this.formatTransactionLink(committedTxn.hash, "View on Explorer")}\n\n`;
         message += `Your position has been closed at market price.`;
 
         const keyboard = new InlineKeyboard()
@@ -4054,7 +4050,7 @@ export class Bot {
           if (response.success) {
             const message = `❌ *Order Cancelled Successfully!*\n\n` +
               `Order ID: ${orderId}\n` +
-              `Transaction: \`${committedTxn.hash}\`\n\n` +
+              `Transaction: ${this.formatTransactionLink(committedTxn.hash, "View on Explorer")}\n\n` +
               `Your order has been cancelled.`;
 
             const keyboard = new InlineKeyboard()
