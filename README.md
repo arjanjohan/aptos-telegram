@@ -1,6 +1,8 @@
-# Kana Labs Perpetual Futures Telegram Bot
+# MoveTogether
 
-A Telegram bot for group-based trading on Kana Labs perpetual futures platform with democratic voting mechanisms for transaction approval.
+![logo](public/logo_small.png)
+
+A Telegram bot for group-based trading on **Kana Labs** perpetual futures platform with democratic voting mechanisms for transaction approval.
 
 ## Overview
 
