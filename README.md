@@ -2,16 +2,16 @@
 
 ![logo](public/logo_small.png)
 
-A Telegram bot for group-based trading on **Kana Labs** perpetual futures platform with democratic voting mechanisms for transaction approval.
+MoveTogether is a Telegram bot for group-based trading perps on **Kana Labs** with democratic voting mechanisms for transaction approval on **Aptos**.
 
 ## Overview
 
-This bot enables Telegram groups to collectively manage a single Kana Labs account for trading perpetual futures on Aptos. Group members can propose trades, and the community votes on whether to execute them before they're executed.
+This bot enables Telegram groups to collectively manage a single Kana Labs account for trading perps on Aptos. Group members can propose trades, and the group members votes on whether to execute them or not.
 
 ### Key Features
 
 - 🏛️ **Democratic Trading**: Group members vote on all trading decisions using Telegram polls
-- 📊 **Perpetual Futures Trading**: Full integration with Kana Labs perpetual futures platform
+- 📊 **Perp Trading**: Full integration with Kana Labs perps platform
 - 💰 **Position Management**: View, manage, and close positions with real-time PnL
 - 🎯 **Risk Management**: Set take profit and stop loss orders
 - 📈 **Real-time Data**: Live market prices and position tracking
@@ -37,8 +37,6 @@ aptos-telegram/
 │       └── usd-value-utils.ts      # USD value calculation utilities
 ├── package.json
 ├── tsconfig.json
-├── CONFIGURATION.md                # Configuration guide
-├── KANA_LABS_README.md            # Kana Labs integration docs
 └── README.md
 ```
 
@@ -87,7 +85,7 @@ aptos-telegram/
 - `/settings` - Bot settings
 
 ### **Trading Flow**
-1. **Select Market**: Choose from available perpetual futures markets
+1. **Select Market**: Choose from available perp markets
 2. **Choose Side**: Select Long (Buy) or Short (Sell)
 3. **Set Leverage**: Choose leverage (2x, 5x, 10x, or custom)
 4. **Order Type**: Select market or limit order
@@ -100,7 +98,7 @@ aptos-telegram/
 
 - **Backend**: TypeScript/Node.js
 - **Blockchain**: Aptos TS SDK
-- **Trading Platform**: Kana Labs Perpetual Futures API
+- **Trading Platform**: Kana Labs Perp API
 - **Bot Framework**: grammY (Telegram Bot API)
 - **Price Data**: Kana Labs API + CoinGecko API
 - **Database**: In-memory (TODO: Move to persistent storage)
@@ -109,7 +107,7 @@ aptos-telegram/
 
 ### **Network Support**
 - **Mainnet**: Production Aptos network (default)
-- **Testnet**: Aptos testnet for development
+- **Testnet**: Aptos testnet for development (Kana Labs testnet was not available during the hackathon)
 
 ### **Market Configuration**
 - **Mainnet Markets**: APT-USD, BTC-USD, ETH-USD, SOL-USD
@@ -122,7 +120,7 @@ aptos-telegram/
 
 ## API Integration
 
-This project uses the  following Kana Labs Perpetual Futures API endpoints:
+This project uses the  following Kana Labs Perps API endpoints:
 
 - **Core Trading Endpoints**:
   - `/getMarketInfo` - Market information and details
@@ -160,12 +158,18 @@ This project uses the  following Kana Labs Perpetual Futures API endpoints:
 ## Roadmap
 
 This is a proof of concept for the CTRL+MOVE hackathon. To make this project production ready, the following features still need to be added:
+
 - **Group Management**:
   - Ensure only verified members can vote
   - Ensure members can only withdraw pro-rate to their deposits
+- **Key management**:
+  - Store privatekey of Aptos account securely
+
+After launching on mainnet, other improvements will be made:
+
 - **Advanced Trading**:
-   - Order modifications
-   - partial position closes
+  - Order modifications
+  - partial position closes
 - **Analytics & Reporting**:
   - Trade history
   - performance metrics
@@ -175,10 +179,8 @@ This is a proof of concept for the CTRL+MOVE hackathon. To make this project pro
 - **Voting Integration**:
   - Customize/override voting requirements per action
   - Admin actions, to allow certain actions without voting (for example, give one person right to manager positions but require group to handle withdrawals)
-- **Key management**:
-  - Store privatekey of Aptos account securely
-- **Simplify actions**:
-  - Some actions that could be executed directly on Aptos, without making API calls to Kana API.
+- **Simplify codebase**:
+  - Some actions can maybe be executed directly on Aptos, without making API calls to Kana API.
 
   ## Team
 

@@ -362,7 +362,6 @@ export class Bot {
   private getMainMenu(): InlineKeyboard {
     return new InlineKeyboard()
       .text("📊 Markets", "markets")
-      .text("⏳ Pending Orders", "pending_orders")
       .row()
       .text("📊 Open Orders", "open_orders")
       .text("📈 Positions", "positions")
@@ -388,20 +387,22 @@ export class Bot {
         const userAddress = getAptosAddress();
         console.log(`🔍 [HOMEPAGE] Fetching Kana Labs balances for: ${userAddress}`);
 
-        const [walletBalance, profileBalance] = await Promise.all([
+        const [walletBalance, profileBalance, totalOrders, totalPositions] = await Promise.all([
           this.kanaLabsPerps.getWalletAccountBalance(userAddress),
-          this.kanaLabsPerps.getProfileBalanceSnapshot(userAddress)
+          this.kanaLabsPerps.getProfileBalanceSnapshot(userAddress),
+          this.getTotalOpenOrders(userAddress),
+          this.getTotalOpenPositions(userAddress)
         ]);
 
         console.log(`🔍 [HOMEPAGE] Kana Labs balances:`, {
           wallet: walletBalance.data,
-          profile: profileBalance.data
+          profile: profileBalance.data,
+          orders: totalOrders,
+          positions: totalPositions
         });
 
-// todo: get actual values
-        message += `⏳ Pending Orders: 1\n`;
-        message += `💻 Open Orders: 0\n`;
-        message += `📊 Open Positions: 2\n\n`;
+        message += `💻 Open Orders: ${totalOrders}\n`;
+        message += `📊 Open Positions: ${totalPositions}\n\n`;
 
 
         if (walletBalance.success) {
@@ -433,7 +434,6 @@ export class Bot {
       const keyboard = new InlineKeyboard();
       keyboard
         .text("📊 Markets", "markets")
-        .text("⏳ Pending Orders", "pending_orders")
         .row()
         .text("📊 Open Orders", "open_orders")
         .text("📈 Positions", "positions")
@@ -470,7 +470,7 @@ export class Bot {
       const profileAddressResult = await this.kanaLabsPerps.getProfileAddress(this.APTOS_ADDRESS);
       const profileAddress = profileAddressResult.success ? profileAddressResult.data : 'Not available';
 
-      const message = `💳 *Wallet Information*\n\n` +
+      const message = `💳 *Wallet Information* \n\n` +
         `*Address:* \`${getAptosAddress()}\`\n` +
         `*Profile Address:* \`${profileAddress}\`\n` +
         `*APT Balance:* ${aptBalance} APT\n` +
@@ -498,11 +498,11 @@ export class Bot {
       const votingTimeMinutes = Math.floor(this.settings.votingTimePeriod / 60);
       const votingThresholdPercent = Math.round(this.settings.votingThreshold * 100);
 
-      const message = `⚙️ *Settings*\n\n` +
+      const message = `⚙️ *Settings* \n\n` +
       `*--- TRANSACTION SETTINGS ---\n` +
         `*Transaction Confirmation:* ${this.settings.disableConfirmation ? '❌ Disabled' : '✅ Enabled'}\n` +
         `*Minimum Display Amount:* $${this.settings.minimumDisplayAmount}\n` +
-        `*--- VOTING SETTINGS ---*\n` +
+        `*--- VOTING SETTINGS ---* \n` +
         `*Voting Time:* ${votingTimeMinutes} minutes\n` +
         `*Approval Threshold:* ${votingThresholdPercent}%\n\n` +
         `Note: Settings are stored in memory and will reset when bot restarts.`;
@@ -544,7 +544,7 @@ export class Bot {
 
 
   private async promptMinDisplayInput(ctx: any) {
-    const message = `⚙️ *Set Minimum Display Amount*\n\n` +
+    const message = `⚙️ *Set Minimum Display Amount* \n\n` +
       `Current minimum: $${this.settings.minimumDisplayAmount}\n\n` +
       `Please enter the minimum USD value to display positions in portfolio.\n` +
       `Send a number (e.g., 5 for $5, 0.5 for $0.50):`;
@@ -566,7 +566,7 @@ export class Bot {
 
   private async promptVotingTimeInput(ctx: any) {
     const currentMinutes = Math.floor(this.settings.votingTimePeriod / 60);
-    const message = `⚙️ *Set Voting Time Period*\n\n` +
+    const message = `⚙️ *Set Voting Time Period* \n\n` +
       `Current time: ${currentMinutes} minutes\n\n` +
       `Please enter the voting time period in minutes.\n` +
       `Send a number (e.g., 5 for 5 minutes, 10 for 10 minutes):`;
@@ -589,7 +589,7 @@ export class Bot {
 
   private async promptVotingThresholdInput(ctx: any) {
     const currentPercent = Math.round(this.settings.votingThreshold * 100);
-    const message = `⚙️ *Set Approval Threshold*\n\n` +
+    const message = `⚙️ *Set Approval Threshold* \n\n` +
       `Current threshold: ${currentPercent}%\n\n` +
       `Please enter the approval threshold as a percentage.\n` +
       `Send a number (e.g., 50 for 50%, 75 for 75%):`;
@@ -801,7 +801,7 @@ export class Bot {
       const sideText = isLong ? "LONG" : "SHORT";
       const sideEmoji = isLong ? "🟢" : "🔴";
 
-      let message = `🎯 *Confirm Take Profit*\n\n`;
+      let message = `🎯 *Confirm Take Profit* \n\n`;
       message += `${sideEmoji} *${sideText}* Position\n`;
       message += `Take Profit Price: ${this.formatDollar(price)}\n\n`;
       message += `This will set a take profit order at ${this.formatDollar(price)}`;
@@ -889,7 +889,7 @@ export class Bot {
       const sideText = isLong ? "LONG" : "SHORT";
       const sideEmoji = isLong ? "🟢" : "🔴";
 
-      let message = `🛡️ *Confirm Stop Loss*\n\n`;
+      let message = `🛡️ *Confirm Stop Loss* \n\n`;
       message += `${sideEmoji} *${sideText}* Position\n`;
       message += `Stop Loss Price: ${this.formatDollar(price)}\n\n`;
       message += `This will set a stop loss order at ${this.formatDollar(price)}`;
@@ -933,7 +933,7 @@ export class Bot {
       const sideText = tradeSide ? "LONG" : "SHORT";
       const sideEmoji = tradeSide ? "🟢" : "🔴";
 
-      let message = `💰 *Confirm Add Margin*\n\n`;
+      let message = `💰 *Confirm Add Margin* \n\n`;
       message += `${sideEmoji} *${sideText}* Position\n`;
       message += `Amount to Add: ${this.formatDollar(amount)}\n\n`;
       message += `This will add ${this.formatDollar(amount)} to your position's margin.`;
@@ -1072,7 +1072,7 @@ export class Bot {
         const side = position.trade_side ? "LONG" : "SHORT";
         const sideEmoji = position.trade_side ? "🟢" : "🔴";
 
-        let message = `✅ *Take Profit Set Successfully*\n\n`;
+        let message = `✅ *Take Profit Set Successfully* \n\n`;
         message += `${sideEmoji} *${marketName}* ${side}\n`;
         message += `Your take profit order has been placed. ${this.formatTransactionLink(committedTxn.hash, "View on Explorer")}\n\n`;
         message += `This order will execute when the price reaches ${this.formatDollar(price)}.`;
@@ -1180,7 +1180,7 @@ export class Bot {
         const side = position.trade_side ? "LONG" : "SHORT";
         const sideEmoji = position.trade_side ? "🟢" : "🔴";
 
-        let message = `✅ *Stop Loss Set Successfully*\n\n`;
+        let message = `✅ *Stop Loss Set Successfully* \n\n`;
         message += `${sideEmoji} *${marketName}* ${side}\n`;
         message += `Your stop loss order has been placed. ${this.formatTransactionLink(committedTxn.hash, "View on Explorer")}\n\n`;
         message += `This order will execute when the price reaches ${this.formatDollar(price)}.`;
@@ -1301,7 +1301,7 @@ export class Bot {
         const side = position.trade_side ? "LONG" : "SHORT";
         const sideEmoji = position.trade_side ? "🟢" : "🔴";
 
-        let message = `✅ *Position Closed Successfully*\n\n`;
+        let message = `✅ *Position Closed Successfully* \n\n`;
         message += `${sideEmoji} *${marketName}* ${side}\n`;
         message += `Size: ${position.size}\n`;
         message += `Closed with: ${closeSide ? "LONG" : "SHORT"} order\n\n`;
@@ -1410,7 +1410,7 @@ export class Bot {
         const side = position.trade_side ? "LONG" : "SHORT";
         const sideEmoji = position.trade_side ? "🟢" : "🔴";
 
-        let message = `✅ *Margin Added Successfully*\n\n`;
+        let message = `✅ *Margin Added Successfully* \n\n`;
         message += `${sideEmoji} *${marketName}* ${side}\n`;
         message += `Amount Added: ${this.formatDollar(amount)}\n\n`;
         message += `Your position's margin has been increased by ${this.formatDollar(amount)}. ${this.formatTransactionLink(committedTxn.hash, "View on Explorer")}`;
@@ -1464,7 +1464,7 @@ export class Bot {
       // Get markets based on current network configuration
       const markets = getMarkets();
 
-      let message = "📊 *Markets*\n\n";
+      let message = "📊 *Markets* \n\n";
       message += "Select a market to view details and trade:\n\n";
 
       const keyboard = new InlineKeyboard();
@@ -1514,7 +1514,7 @@ export class Bot {
       console.log(`🔍 [MARKET_DETAILS] Market info result:`, marketInfo.success ? 'SUCCESS' : 'FAILED');
       console.log(`🔍 [MARKET_DETAILS] Market price result:`, marketPrice.success ? 'SUCCESS' : 'FAILED');
 
-      let message = `📊 *${market.asset}*\n\n`;
+      let message = `📊 *${market.asset}* \n\n`;
 
       // Show current price information
       if (marketPrice.success && marketPrice.data) {
@@ -1543,7 +1543,7 @@ export class Bot {
           const tickSize = data.tick_size || 'N/A';
           const maintenanceMargin = data.maintenance_margin || 'N/A';
 
-          message += `*Trading Parameters*\n`;
+          message += `*Trading Parameters* \n`;
           message += `Max Leverage: ${maxLeverage}x\n`;
           message += `Min Order: ${minLots} lots\n`;
           message += `Max Order: ${maxLots} lots\n`;
@@ -1596,7 +1596,7 @@ export class Bot {
         })
       ]);
 
-      let message = `📈 *${market.asset} - Price Chart*\n\n`;
+      let message = `📈 *${market.asset} - Price Chart* \n\n`;
 
       // Show current price
       if (marketPrice.success && marketPrice.data) {
@@ -1615,11 +1615,11 @@ export class Bot {
         const totalVolume = trades.reduce((sum, trade) => sum + parseFloat(trade.size), 0);
         const avgPrice = trades.reduce((sum, trade) => sum + parseFloat(trade.price), 0) / trades.length;
 
-        message += `**Recent Activity (Last 10 Trades)**\n`;
+        message += `**Recent Activity (Last 10 Trades)** \n`;
         message += `Total Volume: ${totalVolume.toFixed(2)} lots\n`;
         message += `Average Price: $${avgPrice.toFixed(3)}\n\n`;
 
-        message += `**Recent Trades:**\n`;
+        message += `**Recent Trades:** \n`;
         trades.slice(0, 5).forEach((trade, index) => {
           const side = trade.side ? '🟢 Long' : '🔴 Short';
           const time = new Date(parseInt(trade.timestamp) * 1000).toLocaleTimeString();
@@ -1666,14 +1666,14 @@ export class Bot {
         return { success: false, data: null, message: err.message };
       });
 
-      let message = `📊 *${market.asset} - Order Book*\n\n`;
+      let message = `📊 *${market.asset} - Order Book* \n\n`;
 
       if (marketPrice.success && marketPrice.data) {
         if (marketPrice.data.bestAskPrice && marketPrice.data.bestBidPrice) {
           const spread = marketPrice.data.bestAskPrice - marketPrice.data.bestBidPrice;
           const spreadPercent = (spread / marketPrice.data.bestBidPrice) * 100;
 
-          message += `**Current Market Data**\n`;
+          message += `**Current Market Data** \n`;
           message += `Best Bid: $${marketPrice.data.bestBidPrice}\n`;
           message += `Best Ask: $${marketPrice.data.bestAskPrice}\n`;
           message += `Spread: $${spread.toFixed(4)} (${spreadPercent.toFixed(2)}%)\n\n`;
@@ -1734,7 +1734,7 @@ export class Bot {
       const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
       const sideText = orderSide === 'long' ? 'Long (Buy)' : 'Short (Sell)';
 
-      let message = `📊 *Limit Order - ${market.asset}*\n\n`;
+      let message = `📊 *Limit Order - ${market.asset}* \n\n`;
       message += `Side: ${sideEmoji} ${sideText}\n`;
       message += `Leverage: ${leverage}x\n`;
       message += `Current Price: $${currentPrice}\n\n`;
@@ -1795,7 +1795,7 @@ export class Bot {
       const minSize = this.getMinimumOrderSize(market.asset);
       const minSizeText = this.getMinimumOrderSizeText(market.asset);
 
-      let message = `🎯 *Create Order - ${market.asset}*\n\n`;
+      let message = `🎯 *Create Order - ${market.asset}* \n\n`;
       message += `Side: ${sideEmoji} ${sideText}\n`;
       message += `Leverage: ${leverage}x\n`;
       message += `Type: ${orderTypeEmoji} ${orderTypeText}\n`;
@@ -1842,7 +1842,7 @@ export class Bot {
       const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
       const sideText = orderSide === 'long' ? 'Long (Buy)' : 'Short (Sell)';
 
-      let message = `📝 *Create Order - ${market.asset}*\n\n`;
+      let message = `📝 *Create Order - ${market.asset}* \n\n`;
       message += `Side: ${sideEmoji} ${sideText}\n\n`;
       message += `Enter custom leverage (1-20x):\n`;
       message += `Example: 15 (for 15x leverage)`;
@@ -1910,7 +1910,7 @@ export class Bot {
         return;
       }
 
-      let message = `📝 *Create Order - ${market.asset}*\n\n`;
+      let message = `📝 *Create Order - ${market.asset}* \n\n`;
       message += `Select order side:\n\n`;
 
       const keyboard = new InlineKeyboard()
@@ -1954,9 +1954,9 @@ export class Bot {
           // User has existing position - use existing leverage and skip leverage selection
           const existingLeverage = existingPosition.leverage;
 
-          let message = `📝 *Create Order - ${market.asset}*\n\n`;
+          let message = `📝 *Create Order - ${market.asset}* \n\n`;
           message += `Side: ${sideEmoji} ${sideText}\n\n`;
-          message += `🔄 *Adding to Existing Position*\n`;
+          message += `🔄 *Adding to Existing Position* \n`;
           message += `Current Position: ${existingPosition.size} ${market.asset} at ${existingLeverage}x\n`;
           message += `Leverage: ${existingLeverage}x (locked to existing position)\n\n`;
           message += `Your new order will add to your existing ${sideText.toLowerCase()} position.`;
@@ -1975,9 +1975,9 @@ export class Bot {
       }
 
       // No existing position - show normal leverage selection
-      let message = `📝 *Create Order - ${market.asset}*\n\n`;
+      let message = `📝 *Create Order - ${market.asset}* \n\n`;
       message += `Side: ${sideEmoji} ${sideText}\n\n`;
-      message += `✨ *New Position*\n`;
+      message += `✨ *New Position* \n`;
       message += `Select leverage:\n\n`;
 
       const keyboard = new InlineKeyboard()
@@ -2012,7 +2012,7 @@ export class Bot {
       const sideEmoji = orderSide === 'long' ? '🟢' : '🔴';
       const sideText = orderSide === 'long' ? 'Long (Buy)' : 'Short (Sell)';
 
-      let message = `📝 *Create Order - ${market.asset}*\n\n`;
+      let message = `📝 *Create Order - ${market.asset}* \n\n`;
       message += `Side: ${sideEmoji} ${sideText}\n`;
       message += `Leverage: ${leverage}x\n\n`;
       message += `Select order type:\n\n`;
@@ -2042,7 +2042,7 @@ export class Bot {
       const orderTypeEmoji = orderType === 'market' ? '⚡' : '📊';
       const orderTypeText = orderType === 'market' ? 'Market Order' : 'Limit Order';
 
-      let message = `🎯 *Order Confirmation*\n\n`;
+      let message = `🎯 *Order Confirmation* \n\n`;
       message += `Market: ${market.asset}\n`;
       message += `Side: ${sideEmoji} ${sideText}\n`;
       message += `Size: ${size} ${this.getAssetSymbol(market.asset)}\n`;
@@ -2222,7 +2222,7 @@ export class Bot {
             const orderTypeEmoji = orderType === 'market' ? '⚡' : '📊';
             const orderTypeText = orderType === 'market' ? 'Market Order' : 'Limit Order';
 
-        const message = `✅ *Order Placed Successfully!*\n\n` +
+        const message = `✅ *Order Placed Successfully!* \n\n` +
           `Market: ${market.asset}\n` +
           `Side: ${sideEmoji} ${sideText}\n` +
               `Size: ${size} ${this.getAssetSymbol(market.asset)}\n` +
@@ -2308,6 +2308,58 @@ export class Bot {
     }
   }
 
+  /**
+   * Get total count of open orders across all markets
+   */
+  private async getTotalOpenOrders(userAddress: string): Promise<number> {
+    try {
+      const markets = await this.getAvailableMarkets();
+      let totalOrders = 0;
+
+      for (const market of markets) {
+        try {
+          const ordersResult = await this.kanaLabsPerps.getOpenOrders(userAddress, market.market_id);
+          if (ordersResult.success && ordersResult.data.length > 0) {
+            totalOrders += ordersResult.data.length;
+          }
+        } catch (error) {
+          console.error(`❌ [HOMEPAGE] Error fetching orders for market ${market.market_id}:`, error);
+        }
+      }
+
+      return totalOrders;
+    } catch (error) {
+      console.error(`❌ [HOMEPAGE] Error getting total open orders:`, error);
+      return 0;
+    }
+  }
+
+  /**
+   * Get total count of open positions across all markets
+   */
+  private async getTotalOpenPositions(userAddress: string): Promise<number> {
+    try {
+      const markets = await this.getAvailableMarkets();
+      let totalPositions = 0;
+
+      for (const market of markets) {
+        try {
+          const positionsResult = await this.kanaLabsPerps.getPositions(userAddress, market.market_id);
+          if (positionsResult.success && positionsResult.data.length > 0) {
+            totalPositions += positionsResult.data.length;
+          }
+        } catch (error) {
+          console.error(`❌ [HOMEPAGE] Error fetching positions for market ${market.market_id}:`, error);
+        }
+      }
+
+      return totalPositions;
+    } catch (error) {
+      console.error(`❌ [HOMEPAGE] Error getting total open positions:`, error);
+      return 0;
+    }
+  }
+
   private async showDepositAmountPrompt(ctx: any) {
     try {
       // Get current wallet balance for percentage calculations
@@ -2318,7 +2370,7 @@ export class Bot {
 
       const balance = walletBalance.success ? parseFloat(walletBalance.data) : 0;
 
-      const message = "💰 *Deposit USDT*\n\n" +
+      const message = "💰 *Deposit USDT* \n\n" +
         `**Current Wallet Balance:** ${balance.toFixed(2)} USDT\n\n` +
         "Choose deposit amount:";
 
@@ -2379,7 +2431,7 @@ export class Bot {
         step: "custom_amount"
       });
 
-      const message = "💰 *Custom Deposit Amount*\n\n" +
+      const message = "💰 *Custom Deposit Amount* \n\n" +
         "Enter the exact USDT amount you want to deposit:\n" +
         "(e.g., 50, 100.5, 250.75)";
 
@@ -2451,7 +2503,7 @@ export class Bot {
         step: "custom_withdraw_amount"
       });
 
-      const message = "📤 *Custom Withdraw Amount*\n\n" +
+      const message = "📤 *Custom Withdraw Amount* \n\n" +
         "Enter the exact USDT amount you want to withdraw:\n" +
         "(e.g., 50, 100.5, 250.75)";
 
@@ -2508,7 +2560,7 @@ export class Bot {
         .text("✅ Confirm Deposit", "confirm_deposit")
         .text("❌ Cancel", "deposit");
 
-      const message = `📥 *Confirm Deposit*\n\n` +
+      const message = `📥 *Confirm Deposit* \n\n` +
         `*Amount:* ${amount} USDT\n\n` +
         `⚠️ *This will deposit USDT to your Kana Labs trading account!*`;
 
@@ -2575,7 +2627,7 @@ export class Bot {
       this.pendingDeposits.delete(userId);
 
       // Show success message
-      const message = `✅ *Deposit Successful!*\n\n` +
+      const message = `✅ *Deposit Successful!* \n\n` +
         `*Amount:* ${pendingDeposit.amount} USDT\n` +
         `Your deposit has been processed successfully! ${this.formatTransactionLink(committedTxn.hash, "View on Explorer")}`;
 
@@ -2612,8 +2664,8 @@ export class Bot {
 
       const tradingBalance = profileBalance.success ? parseFloat(profileBalance.data) : 0;
 
-      let message = "📤 *Withdraw from Kana Labs Perps*\n\n";
-      message += "**Current Account Balances:**\n";
+      let message = "📤 *Withdraw from Kana Labs Perps* \n\n";
+      message += "**Current Account Balances:** \n";
       message += `Wallet: ${walletBalance.success ? walletBalance.data : 'N/A'} USDT\n`;
       message += `Trading Account: ${profileBalance.success ? profileBalance.data : 'N/A'} USDT\n\n`;
       message += "Choose withdraw amount:";
@@ -2653,7 +2705,7 @@ export class Bot {
       const keyboard = new InlineKeyboard()
         .text("❌ Cancel", "withdraw");
 
-      const message = `📤 *Withdraw from Kana Labs Trading Account*\n\n` +
+      const message = `📤 *Withdraw from Kana Labs Trading Account* \n\n` +
         `Please enter the amount in USDT to withdraw:\n` +
         `(Enter a number, e.g., 50, 100, 250)\n\n` +
         `This will move USDT from your trading account to your wallet.`;
@@ -2703,7 +2755,7 @@ export class Bot {
         .text("✅ Confirm Withdraw", "confirm_withdraw")
         .text("❌ Cancel", "withdraw");
 
-      const message = `📤 *Confirm Withdraw*\n\n` +
+      const message = `📤 *Confirm Withdraw* \n\n` +
         `*Amount:* ${data.amount} USDT\n\n` +
         `⚠️ *This will withdraw USDT from your Kana Labs trading account!*`;
 
@@ -2774,7 +2826,7 @@ export class Bot {
       this.pendingDeposits.delete(userId);
 
       // Show success message
-      const message = `✅ *Withdraw Successful!*\n\n` +
+      const message = `✅ *Withdraw Successful!* \n\n` +
         `*Amount:* ${pendingDeposit.amount} USDT\n` +
         `Your withdraw has been processed successfully! ${this.formatTransactionLink(committedTxn.hash, "View on Explorer")}`;
 
@@ -2829,7 +2881,7 @@ export class Bot {
       // Show success message
       const explorerUrl = this.getExplorerUrl(pendingTransaction.hash);
 
-      const message = `✅ *USDT Faucet Successful!*\n\n` +
+      const message = `✅ *USDT Faucet Successful!* \n\n` +
         `*Amount:* 1000 USDT\n\n` +
         `View on [Aptos Explorer](${explorerUrl})`;
 
@@ -2892,7 +2944,7 @@ export class Bot {
       console.log(`🔍 [POSITIONS] Total positions found: ${allPositions.length}`, allPositions);
 
       if (allPositions.length === 0) {
-        const message = "📈 *Your Positions*\n\n" +
+        const message = "📈 *Your Positions* \n\n" +
           "You currently have no open positions.\n\n" +
           "Start trading by depositing funds and placing orders!";
 
@@ -2907,7 +2959,7 @@ export class Bot {
       }
 
       // Format positions message with buttons
-      let message = "📈 *Your Positions*\n\n";
+      let message = "📈 *Your Positions* \n\n";
 
       if (allPositions.length === 0) {
         message += "No open positions found.";
@@ -3050,17 +3102,17 @@ export class Bot {
       const pnlEmoji = pnl >= 0 ? "📈" : "📉";
       const pnlSign = pnl >= 0 ? "+" : "";
 
-      let message = `📈 *Position Details*\n\n`;
+      let message = `📈 *Position Details* \n\n`;
       const marketName = position.market_name || `Market ${position.market_id}`;
       message += `${sideEmoji} *${marketName}* ${side}\n\n`;
-      message += `**Position Info:**\n`;
+      message += `**Position Info:** \n`;
       message += `   Size: ${position.size} | Available: ${position.available_order_size || position.size}\n`;
       message += `   Entry: ${this.formatDollar(position.entry_price)} | Current: $${currentPrice}\n`;
       message += `   Value: ${this.formatDollar(position.value)} | Margin: ${this.formatDollar(position.margin)}\n`;
       message += `   Leverage: ${position.leverage}x\n`;
       message += `   PnL: ${pnlEmoji} ${pnlSign}${this.formatDollar(pnl)} (${pnlPercentage.toFixed(2)}%)\n\n`;
 
-      message += `**Risk Management:**\n`;
+      message += `**Risk Management:** \n`;
       if (position.tp && position.tp !== "0") {
         message += `   Take Profit: ${this.formatDollar(position.tp)}\n`;
       } else {
@@ -3076,7 +3128,7 @@ export class Bot {
       }
       message += `\n`;
 
-      message += `**Reference:**\n`;
+      message += `**Reference:** \n`;
       message += `   Trade ID: \`${position.trade_id}\`\n`;
       message += `   Market ID: \`${position.market_id}\`\n`;
 
@@ -3286,7 +3338,7 @@ export class Bot {
         const side = position.trade_side ? "LONG" : "SHORT";
         const sideEmoji = position.trade_side ? "🟢" : "🔴";
 
-        let message = `✅ *Position Closed Successfully*\n\n`;
+        let message = `✅ *Position Closed Successfully* \n\n`;
         message += `${sideEmoji} *${marketName}* ${side}\n`;
         message += `Size: ${position.size}\n`;
         message += `Closed with: ${closeSide ? "LONG" : "SHORT"} order\n\n`;
@@ -3350,7 +3402,7 @@ export class Bot {
       const currentMargin = parseFloat(position.margin);
       const liquidationPrice = parseFloat(position.liq_price);
 
-      let message = `💰 *Add Margin*\n\n`;
+      let message = `💰 *Add Margin* \n\n`;
       message += `${sideEmoji} *${marketName}* ${side}\n`;
       message += `Current Margin: ${this.formatDollar(currentMargin)}\n`;
       message += `Liquidation Price: ${this.formatDollar(liquidationPrice)}\n\n`;
@@ -3424,7 +3476,7 @@ export class Bot {
       const currentPrice = parseFloat(position.price || position.entry_price);
       const entryPrice = parseFloat(position.entry_price);
 
-      let message = `🎯 *Set Take Profit*\n\n`;
+      let message = `🎯 *Set Take Profit* \n\n`;
       message += `${sideEmoji} *${marketName}* ${side}\n`;
       message += `Entry Price: ${this.formatDollar(entryPrice)}\n`;
       message += `Current Price: ${this.formatDollar(currentPrice)}\n\n`;
@@ -3502,7 +3554,7 @@ export class Bot {
       const currentPrice = parseFloat(position.price || position.entry_price);
       const entryPrice = parseFloat(position.entry_price);
 
-      let message = `🛡️ *Set Stop Loss*\n\n`;
+      let message = `🛡️ *Set Stop Loss* \n\n`;
       message += `${sideEmoji} *${marketName}* ${side}\n`;
       message += `Entry Price: ${this.formatDollar(entryPrice)}\n`;
       message += `Current Price: ${this.formatDollar(currentPrice)}\n`;
@@ -3596,7 +3648,7 @@ export class Bot {
       // Filter orders that might be related to this position (same trade_id)
       const relatedOrders = orders.filter(order => order.trade_id === tradeId);
 
-      let message = `📊 *Orders for ${position.market_name}*\n\n`;
+      let message = `📊 *Orders for ${position.market_name}* \n\n`;
 
       if (relatedOrders.length === 0) {
         message += "No open orders found for this position.";
@@ -3694,7 +3746,7 @@ export class Bot {
       // Filter trades that might be related to this position (same trade_id)
       const relatedTrades = allTrades.filter(trade => trade.trade_id === tradeId);
 
-      let message = `📈 *Trade History for ${position.market_name}*\n\n`;
+      let message = `📈 *Trade History for ${position.market_name}* \n\n`;
 
       if (relatedTrades.length === 0) {
         message += "No trade history found for this position.";
@@ -3744,9 +3796,6 @@ export class Bot {
       const userAddress = getAptosAddress();
       console.log(`🔍 [ORDERS] Starting orders fetch for address: ${userAddress}`);
 
-      // Show loading message
-      await ctx.reply("🔄 Loading your open orders...");
-
       // Get all available markets first
       const markets = await this.getAvailableMarkets();
       console.log(`🔍 [ORDERS] Found ${markets.length} markets:`, markets.map(m => `${m.base_name} (${m.market_id})`));
@@ -3778,7 +3827,7 @@ export class Bot {
       console.log(`🔍 [ORDERS] Total orders found: ${allOrders.length}`, allOrders);
 
       if (allOrders.length === 0) {
-        const message = "📊 *Your Open Orders*\n\n" +
+        const message = "📊 *Open Orders* \n\n" +
           "You currently have no open orders.\n\n" +
           "Place your first order to start trading!";
 
@@ -3793,7 +3842,7 @@ export class Bot {
       }
 
       // Format orders message with individual buttons (like positions)
-      let message = "📊 *Your Open Orders*\n\n";
+      let message = "📊 *Open Orders* \n\n";
       const keyboard = new InlineKeyboard();
 
       for (const order of allOrders) {
@@ -4048,7 +4097,7 @@ export class Bot {
           });
 
           if (response.success) {
-            const message = `❌ *Order Cancelled Successfully!*\n\n` +
+            const message = `❌ *Order Cancelled Successfully!* \n\n` +
               `Order ID: ${orderId}\n` +
               `Transaction: ${this.formatTransactionLink(committedTxn.hash, "View on Explorer")}\n\n` +
               `Your order has been cancelled.`;
@@ -4078,7 +4127,7 @@ export class Bot {
   }
 
   private async flipOrderToMarket(ctx: any, orderId: string) {
-    const message = `🚧 *Coming Soon!*\n\n` +
+    const message = `🚧 *Coming Soon!* \n\n` +
       `The "Flip to Market" feature is currently under development.\n\n` +
       `For now, you can:\n` +
       `• Cancel your limit order\n` +
@@ -4284,8 +4333,8 @@ export class Bot {
 
   private async showExportPrivateKeyWarning(ctx: any) {
     const message = `⚠️ *SECURITY WARNING* ⚠️\n\n` +
-      `*You are about to export your private key!*\n\n` +
-      `🚨 *DANGER:*\n` +
+      `*You are about to export your private key!* \n\n` +
+      `🚨 *DANGER:* \n` +
       `• Never share your private key with anyone\n` +
       `• Anyone with this key can access your wallet\n` +
       `• This action cannot be undone\n` +
@@ -4307,10 +4356,10 @@ export class Bot {
     try {
       const privateKey = getAptosPrivateKey();
 
-      const message = `🔑 *Your Private Key*\n\n` +
+      const message = `🔑 *Your Private Key* \n\n` +
         `*Address:* \`${getAptosAddress()}\`\n\n` +
-        `*Private Key:*\n\`\`\`\n${privateKey}\n\`\`\`\n\n` +
-        `⚠️ *Keep this private key secure!*\n` +
+        `*Private Key:* \n\`\`\`\n${privateKey}\n\`\`\`\n\n` +
+        `⚠️ *Keep this private key secure!* \n` +
         `• Store it in a safe place\n` +
         `• Never share it with anyone\n` +
         `• Anyone with this key can control your wallet`;
@@ -4335,13 +4384,13 @@ export class Bot {
       const userAddress = getAptosAddress();
       const kanaConfig = getKanaLabsConfig();
 
-      let debugMessage = "🔍 *API Debug Information*\n\n";
+      let debugMessage = "🔍 *API Debug Information* \n\n";
       debugMessage += `*User Address:* \`${userAddress}\`\n`;
       debugMessage += `*API Base URL:* \`${kanaConfig.baseUrl}\`\n`;
       debugMessage += `*API Key:* \`${kanaConfig.apiKey ? 'Set' : 'Not Set'}\`\n\n`;
 
       // Test API connection with a simple call
-      debugMessage += "*Testing API calls...*\n";
+      debugMessage += "*Testing API calls...* \n";
 
       try {
         // Test market info for APT/USDC
@@ -4372,7 +4421,7 @@ export class Bot {
         debugMessage += `❌ Orders Error: ${error}\n`;
       }
 
-      debugMessage += "\n*Testing Balance Endpoints...*\n";
+      debugMessage += "\n*Testing Balance Endpoints...* \n";
 
       try {
         // Test wallet balance
