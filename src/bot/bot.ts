@@ -2976,13 +2976,54 @@ export class Bot {
 
         const side = position.trade_side ? "LONG" : "SHORT";
         const sideEmoji = position.trade_side ? "🟢" : "🔴";
-        const pnl = parseFloat(position.pnl || "0");
-        const pnlEmoji = pnl >= 0 ? "📈" : "📉";
-        const pnlSign = pnl >= 0 ? "+" : "";
 
-        // Calculate PnL percentage based on margin (consistent with position details)
-        const margin = parseFloat(position.margin || "0");
-        const pnlPercentage = margin > 0 ? (pnl / margin) * 100 : 0;
+        // Calculate real-time PnL (same logic as position details)
+        let calculatedPnl = 0;
+        let pnlPercentage = 0;
+
+        try {
+          const priceResult = await this.kanaLabsPerps.getMarketPrice(position.market_id);
+
+          if (priceResult.success && priceResult.data) {
+            let currentPrice = 0;
+
+            // Calculate current price (average of bid and ask if available, or use single price)
+            if (priceResult.data.bestAskPrice && priceResult.data.bestBidPrice) {
+              currentPrice = (priceResult.data.bestAskPrice + priceResult.data.bestBidPrice) / 2;
+            } else if (priceResult.data.price) {
+              currentPrice = parseFloat(priceResult.data.price);
+            }
+
+            // Calculate PnL based on current price
+            const entryPrice = parseFloat(position.entry_price || "0");
+            const size = parseFloat(position.size || "0");
+
+            if (entryPrice > 0 && currentPrice > 0 && size > 0) {
+              if (position.trade_side) {
+                // LONG position: PnL = (current_price - entry_price) * size
+                calculatedPnl = (currentPrice - entryPrice) * size;
+              } else {
+                // SHORT position: PnL = (entry_price - current_price) * size
+                calculatedPnl = (entryPrice - currentPrice) * size;
+              }
+
+              // Calculate PnL percentage based on margin
+              const margin = parseFloat(position.margin || "0");
+              if (margin > 0) {
+                pnlPercentage = (calculatedPnl / margin) * 100;
+              }
+            }
+          }
+        } catch (error) {
+          console.error(`Error fetching market price for ${position.market_id}:`, error);
+          // Fallback to API PnL if calculation fails
+          calculatedPnl = parseFloat(position.pnl || "0");
+          const margin = parseFloat(position.margin || "0");
+          pnlPercentage = margin > 0 ? (calculatedPnl / margin) * 100 : 0;
+        }
+
+        const pnlEmoji = calculatedPnl >= 0 ? "📈" : "📉";
+        const pnlSign = calculatedPnl >= 0 ? "+" : "";
 
         const marketName = position.market_name || `Market ${position.market_id}`;
         const buttonText = `${sideEmoji} ${marketName} ${side}\nSize: ${position.size} | PnL: ${pnlEmoji} ${pnlSign}${pnlPercentage.toFixed(2)}%`;
