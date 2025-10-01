@@ -76,6 +76,17 @@ aptos-telegram/
    npm start
    ```
 
+## Group Chat Setup
+
+### **Privacy Mode Configuration**
+
+To enable the bot to receive typed input in group chats, you need to disable privacy mode:
+
+1. **Open a chat with [@BotFather](https://t.me/BotFather)** on Telegram
+2. **Send the command** `/setprivacy`
+3. **Select your bot** from the list
+4. **Choose "Disable"** to turn off privacy mode
+
 ## Commands
 
 ### **Main Commands**
@@ -101,7 +112,6 @@ aptos-telegram/
 - **Trading Platform**: Kana Labs Perp API
 - **Bot Framework**: grammY (Telegram Bot API)
 - **Price Data**: Kana Labs API + CoinGecko API
-- **Database**: In-memory (TODO: Move to persistent storage)
 
 ## Configuration
 
@@ -118,42 +128,6 @@ aptos-telegram/
 - **Voting Period**: 5 minutes (configurable)
 - **Approval Threshold**: 50% (configurable)
 
-## API Integration
-
-This project uses the  following Kana Labs Perps API endpoints:
-
-- **Core Trading Endpoints**:
-  - `/getMarketInfo` - Market information and details
-  - `/getMarketPrice` - Real-time market prices (bid/ask)
-  - `/getLastExecutionPrice` - Last execution price for markets
-  - `/placeMarketOrder` - Create market orders (GET request)
-  - `/placeLimitOrder` - Create limit orders (GET request)
-  - `/placeMultipleOrders` - Create multiple orders at once
-  - `/cancelMultipleOrders` - Cancel multiple orders
-  - `/cancelAndPlaceMultipleOrders` - Cancel and place orders atomically
-
-- **Position & Order Management**:
-  - `/getPositions` - Get user positions for a market
-  - `/getOpenOrders` - Get open orders for a market
-  - `/getOrderHistory` - Get order history for a market
-  - `/getAllTrades` - Get all trades for a market
-  - `/getFills` - Get fills for a market
-  - `/getOrderStatusByOrderId` - Get specific order status
-  - `/getAllOpenOrderIds` - Get all open order IDs
-
-- **Risk Management**:
-  - `/updateTakeProfit` - Set/update take profit for positions
-  - `/updateStopLoss` - Set/update stop loss for positions
-  - `/addMargin` - Add margin to existing positions
-
-- **Account & Balance Management**:
-  - `/getWalletAccountBalance` - Get wallet USDT balance
-  - `/getProfileBalanceSnapshot` - Get Kana Labs profile balance
-  - `/getNetProfileBalance` - Get net profile balance
-  - `/getAccountAptBalance` - Get APT balance
-  - `/getProfileAddress` - Get Kana Labs profile address
-  - `/deposit` - Deposit USDT to Kana Labs (GET request)
-  - `/withdrawMultipleMarkets` - Withdraw from Kana Labs (GET request)
 
 ## Roadmap
 
@@ -168,6 +142,7 @@ This is a proof of concept for the CTRL+MOVE hackathon. To make this project pro
 After launching on mainnet, other improvements will be made:
 
 - **Advanced Trading**:
+  - Close with limit order
   - Order modifications
   - partial position closes
 - **Analytics & Reporting**:
@@ -181,7 +156,12 @@ After launching on mainnet, other improvements will be made:
   - Admin actions, to allow certain actions without voting (for example, give one person right to manager positions but require group to handle withdrawals)
 - **Simplify codebase**:
   - Some actions can maybe be executed directly on Aptos, without making API calls to Kana API.
+  - Formatting in Telegram properly (bold doesn't show up right sometimes)
 
-  ## Team
+## Links
+- [Github repo](https://github.com/arjanjohan/aptos-telegram)
+- [Dorahacks Buidl](https://dorahacks.io/buidl/32655)
+- [Demo video](https://youtu.be/Ghx5H2Ukevg)
 
-  MoveTogether is built as a solo project by [arjanjohan](https://x.com/arjanjohan)
+## Team
+MoveTogether is built as a solo project by [arjanjohan](https://x.com/arjanjohan)
