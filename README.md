@@ -137,6 +137,7 @@ This is a proof of concept for the CTRL+MOVE hackathon. To make this project pro
   - Ensure only verified members can vote
   - Ensure members can only withdraw pro-rate to their deposits
 - **Key management**:
+  - Creation of Kana Labs account from Telegram
   - Store privatekey of Aptos account securely
 
 After launching on mainnet, other improvements will be made:
@@ -144,7 +145,7 @@ After launching on mainnet, other improvements will be made:
 - **Advanced Trading**:
   - Close with limit order
   - Order modifications
-  - partial position closes
+  - Partial position closes
 - **Analytics & Reporting**:
   - Trade history
   - performance metrics
